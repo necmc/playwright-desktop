@@ -12,7 +12,7 @@
 
 ## Restricciones
 
-- Cada demo ocupa su propia carpeta dentro de `demo/`. Este caso completo pertenece a `demo/informacion-equipo/`.
+- Cada demo ocupa su propia carpeta dentro de `demo/`. Este caso completo pertenece a `demo/pc-info/`.
 - La carpeta raíz `lib/` queda destinada a la librería de Playwright Python.
 - Tres campos editables en Java, con fecha actual, nombre del equipo y alias `Usuario demo`.
 - Operaciones locales independientes con vigencia de veinte minutos.
@@ -29,7 +29,7 @@
 
 ## Tarea 1 — web y operaciones
 
-Archivos en `demo/informacion-equipo/web/`, con `app.py`, `operations.py`, `pdf_report.py`, `templates/`, `static/`, `requirements.txt` y `test_app.py`.
+Archivos en `demo/pc-info/web/`, con `app.py`, `operations.py`, `pdf_report.py`, `templates/`, `static/`, `requirements.txt` y `test_app.py`.
 
 Contrato de los datos con nombres `date`, `computerName` y `alias`. `POST /api/operations` devuelve `operation_id` y `launch_url`. `GET /api/operations/<id>` devuelve `status` y los datos si existen. `POST /api/operations/<id>/result` confirma el formulario. Los endpoints `/cancel` y `/error` comunican el cierre y los fallos. `GET /api/operations/<id>/document.pdf` entrega el resultado.
 
@@ -40,7 +40,7 @@ Contrato de los datos con nombres `date`, `computerName` y `alias`. `POST /api/o
 
 ## Tarea 2 — formulario Java
 
-Archivo principal `demo/informacion-equipo/desktop-java/src/InformationForm.java`. Recibe una URL de operación local, obtiene los valores iniciales y devuelve un formulario HTTP UTF-8. Las clases y el JAR se generan en `demo/informacion-equipo/desktop-java/build/`.
+Archivo principal `demo/pc-info/desktop-java/src/InformationForm.java`. Recibe una URL de operación local, obtiene los valores iniciales y devuelve un formulario HTTP UTF-8. Las clases y el JAR se generan en `demo/pc-info/desktop-java/build/`.
 
 - [x] Implementar Swing con campos accesibles y botón **Confirmar**.
 - [x] Implementar validación y envío fuera del hilo de UI, conservación de valores ante fallos y cancelación al cerrar.
@@ -49,7 +49,7 @@ Archivo principal `demo/informacion-equipo/desktop-java/src/InformationForm.java
 
 ## Tarea 3 — lanzador y publicación
 
-Archivos `demo/informacion-equipo/launcher-clickonce/Launcher.cs` y `demo/informacion-equipo/launcher-clickonce/build.ps1`. El lanzador usa `ApplicationDeployment.CurrentDeployment.ActivationUri`, valida el servidor local y ejecuta el JAR con el runtime configurado. La publicación contiene el lanzador, el JAR y la configuración Java en `launcher-clickonce/publish/`. Mage pertenece a `launcher-clickonce/.tools/` dentro de esta misma demo.
+Archivos `demo/pc-info/launcher-clickonce/Launcher.cs` y `demo/pc-info/launcher-clickonce/build.ps1`. El lanzador usa `ApplicationDeployment.CurrentDeployment.ActivationUri`, valida el servidor local y ejecuta el JAR con el runtime configurado. La publicación contiene el lanzador, el JAR y la configuración Java en `launcher-clickonce/publish/`. Mage pertenece a `launcher-clickonce/.tools/` dentro de esta misma demo.
 
 - [x] Compilar C# con las herramientas disponibles de Windows.
 - [x] Generar manifiestos con parámetros URL habilitados y verificar su distribución desde Flask.
@@ -59,10 +59,10 @@ Archivos `demo/informacion-equipo/launcher-clickonce/Launcher.cs` y `demo/inform
 
 ## Tarea 4 — recorrido y documentación
 
-- [x] Proporcionar `demo/informacion-equipo/start.ps1` para preparar dependencias, compilar los componentes y arrancar Flask con un solo comando. Se verificaron el arranque desde otra carpeta, el puerto configurable, HTTP 200, creación de operaciones, coherencia de la publicación, rechazo de puerto ocupado y parada con Ctrl+C. El arranque predeterminado quedó verificado en `18765`.
+- [x] Proporcionar `demo/pc-info/start.ps1` para preparar dependencias, compilar los componentes y arrancar Flask con un solo comando. Se verificaron el arranque desde otra carpeta, el puerto configurable, HTTP 200, creación de operaciones, coherencia de la publicación, rechazo de puerto ocupado y parada con Ctrl+C. El arranque predeterminado quedó verificado en `18765`.
 - [ ] Probar desde Edge la activación ClickOnce y observar Java.
 - [ ] Editar los campos, confirmar y comprobar valores en la web y en el PDF.
-- [x] Documentar ejecución, compilación, configuración, archivos y pruebas en `demo/informacion-equipo/README.md`, con un índice en `demo/README.md`.
+- [x] Centralizar objetivo, contenido, ejecución, configuración y pruebas en `demo/README.md`, único README de las demos.
 - [x] Mantener los detalles internos en la documentación técnica y crear `lib/README.md`.
 - [ ] Ejecutar una revisión final independiente y corregir hallazgos antes de entregar.
 

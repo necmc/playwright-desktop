@@ -1,7 +1,8 @@
 param(
     [string]$BaseUrl = 'http://127.0.0.1:18765',
     [string]$JavaHome = $env:JAVA_HOME,
-    [string]$JdkHome = $env:JAVA_HOME
+    [string]$JdkHome = $env:JAVA_HOME,
+    [switch]$EnableAccessBridge
 )
 
 $ErrorActionPreference = 'Stop'
@@ -51,11 +52,15 @@ $csharp = Join-Path $env:WINDIR 'Microsoft.NET/Framework64/v4.0.30319/csc.exe'
 if ($LASTEXITCODE -ne 0) { throw 'Falló la compilación del lanzador C#.' }
 
 $escapedJavaHome = [System.Security.SecurityElement]::Escape($JavaHome)
+$bridgeEnabled = $EnableAccessBridge.IsPresent.ToString().ToLowerInvariant()
 $configuration = @"
 <?xml version="1.0" encoding="utf-8"?>
 <configuration>
   <startup><supportedRuntime version="v4.0" sku=".NETFramework,Version=v4.8" /></startup>
-  <appSettings><add key="JavaHome" value="$escapedJavaHome" /></appSettings>
+  <appSettings>
+    <add key="JavaHome" value="$escapedJavaHome" />
+    <add key="EnableAccessBridge" value="$bridgeEnabled" />
+  </appSettings>
 </configuration>
 "@
 [System.IO.File]::WriteAllText((Join-Path $payloadRoot 'InformationDemo.exe.config'), $configuration, [System.Text.UTF8Encoding]::new($false))

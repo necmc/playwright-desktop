@@ -4,7 +4,8 @@ param(
     [int]$Port = 18765,
     [string]$JavaHome = $env:JAVA_HOME,
     [string]$JdkHome = $env:JAVA_HOME,
-    [string]$Python = 'py'
+    [string]$Python = 'py',
+    [switch]$EnableAccessBridge
 )
 
 $ErrorActionPreference = 'Stop'
@@ -36,12 +37,12 @@ Write-Host '[1/3] Preparando las dependencias de Python global...'
 if ($LASTEXITCODE -ne 0) { throw 'No se pudieron instalar las dependencias Python de la demo.' }
 
 Write-Host '[2/3] Compilando Java, el lanzador C# y la publicación ClickOnce...'
-& $buildScript -BaseUrl $baseUrl -JavaHome $JavaHome -JdkHome $JdkHome
+& $buildScript -BaseUrl $baseUrl -JavaHome $JavaHome -JdkHome $JdkHome -EnableAccessBridge:$EnableAccessBridge
 
 Write-Host "[3/3] Arrancando la web en $baseUrl"
 Write-Host 'Abre esta dirección en Microsoft Edge y pulsa Obtener información.'
 Write-Host 'Mantén esta terminal abierta. Usa Ctrl+C para detener el servidor.'
 
 # Un único proceso de servidor en primer plano facilita detener la demo.
-& $Python -m flask --app (Join-Path $webRoot 'app.py') run --host 127.0.0.1 --port $Port --no-reload
+& $Python -B -m flask --app (Join-Path $webRoot 'app.py') run --host 127.0.0.1 --port $Port --no-reload
 if ($LASTEXITCODE -ne 0) { throw 'El servidor web terminó con un error.' }

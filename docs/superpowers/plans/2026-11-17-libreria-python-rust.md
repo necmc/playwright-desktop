@@ -1,6 +1,6 @@
 # playwright-desktop — plan de implementación
 
-> Para ejecutar este plan, leer primero la especificación enlazada y avanzar por entregables verificables. La implementación requiere revisión del diseño. Este documento es un plan; no representa tareas ya realizadas.
+> Plan de referencia. La base Python/Rust ya está implementada y compila; el recorrido completo sigue pendiente. El seguimiento actualizado está en [Estado y pendientes](../../pendientes.md). Las listas originales conservan el alcance previsto y no son un registro actualizado de ejecución.
 
 **Objetivo.** Extender las clases `Page` oficiales mediante una importación y automatizar el formulario Swing de la demo desde `page.desktop` con un motor Rust.
 
@@ -12,7 +12,21 @@
 
 ## Restricciones globales
 
-- Implementación distribuible dentro de `lib/`; demo en `demo/informacion-equipo/`.
+Actualización aprobada: la automatización de la demo utiliza **Page Object Model (POM)** y un único escenario funcional. El test contiene el recorrido, sus aserciones, la importación de `playwright_desktop` y las llamadas `page.desktop.configure()`, `set_default_timeout()` y `expect_window()`. El Page Object Java recibe el mismo `page` y utiliza `page.desktop.window()` con locators y acciones públicas. `support/` se limita a preparar y limpiar recursos. Mantener unittest, sin nuevas dependencias ni capas genéricas de acciones. Las pruebas del motor pertenecen a la librería, no a la automatización de ejemplo.
+
+Refactorización acotada de la tarea 6:
+
+- [x] Crear datos de prueba explícitos y Page Objects web y Java para el escenario funcional.
+- [x] Centralizar configuración y fixtures; registrar la limpieza al adquirir cada recurso.
+- [x] Dejar solo el escenario funcional en `tests/`; retirar de la demo los casos técnicos Java, el heartbeat y el diagnóstico auxiliar con sus recursos exclusivos.
+- [x] Simplificar la ejecución a `py demo/pc-info-automation/run.py`, sin flags de activación ni comandos de descubrimiento. Detectar el runtime desde la publicación y conservar errores/códigos de salida reales.
+- [x] Comprobar el comando simplificado: detecta OpenJDK, arranca web/Edge y ejecuta un único caso. El timeout ClickOnce pendiente devuelve código 1 y cierra navegador/servidor; no se considera un recorrido aprobado.
+
+Por indicación del usuario, integrar estos cambios en el commit de implementación existente, conservando separado el commit de notificaciones.
+
+La demo se llama `pc-info` y su automatización `pc-info-automation`. La ejecución usa un perfil de navegador temporal que se elimina al cerrar. No genera automáticamente capturas, JSON de descargas ni logs Java; los comandos de la demo evitan escribir caché de bytecode Python.
+
+- Implementación distribuible dentro de `lib/`; demo en `demo/pc-info/` y toda su automatización mediante la librería en `demo/pc-info-automation/`.
 - El usuario conserva imports, fixtures y métodos web oficiales. Solo añade `import playwright_desktop`.
 - Añadir exclusivamente `Page.desktop`, tanto a la clase pública sync como a la async.
 - Carga del motor diferida, configuración JAB explícita y sin cambios automáticos de accesibilidad al importar.
@@ -40,7 +54,7 @@
 
 - [ ] Comprobar Rust MSVC y herramientas C++, Python convencional x64, versiones disponibles y presencia del bridge en el runtime de la demo. No instalar ni habilitar componentes silenciosamente.
 - [ ] Trasladar los bloques TOML de la especificación y comprobar la compatibilidad de versiones mediante una construcción mínima.
-- [ ] Desde `lib/`, ejecutar `py -m pip install --user "maturin>=1.16,<2"`, generar `Cargo.lock` y construir con `py -m maturin build --release --locked --out dist`.
+- [ ] Desde `lib/`, ejecutar `py -m pip install --user "maturin>=1.16,<2"`, generar `Cargo.lock` y construir con `py -m maturin build --release --locked --target-dir rust/target/python --out dist/python`.
 - [ ] Instalar el wheel resultante con `py -m pip install --user <ruta-del-wheel>`. Desde una carpeta fuera del repositorio, importar `_native`, consultar `binding_version()` y confirmar que no se necesita el árbol fuente.
 - [ ] Registrar target, Python, toolchain y etiqueta de wheel utilizados. Resolver incompatibilidades antes de continuar; todavía no hay una API desktop funcional.
 
@@ -101,23 +115,23 @@
 
 ## Tarea 6 — recorrido real de la demo
 
-**Archivos:** crear `lib/tests/windows/test_java.py` y `test_demo.py`. Actualizar las instrucciones de la demo únicamente cuando lo requiera la preparación explícita de JAB.
+**Archivos:** `demo/pc-info-automation/run.py` y `tests/test_information_flow.py`, con Page Objects en `pages/` y fixtures en `support/`. Instrucciones centralizadas en `demo/README.md`, único README de las demos. Los casos técnicos del motor se verifican como parte de la librería.
 
 **Consume:** demo compilada, OpenJDK con JAB activo, Edge con activación ClickOnce disponible y wheel instalado. **Produce:** evidencia del recorrido que utiliza la clase oficial `Page` con una sola importación adicional.
 
 - [ ] Primero repetir manualmente la activación de la publicación corregida con `/nowin32manifest`. Resolver cualquier bloqueo real de ClickOnce antes de atribuirlo al motor desktop.
-- [ ] Ejecutar `demo/informacion-equipo/start.ps1` en una terminal controlada y usar su dirección efectiva, por defecto `127.0.0.1:18765`. Documentar cómo se detiene el proceso al finalizar la prueba.
+- [ ] Ejecutar `demo/pc-info/start.ps1` en una terminal controlada y usar su dirección efectiva, por defecto `127.0.0.1:18765`. Documentar cómo se detiene el proceso al finalizar la prueba.
 - [ ] Probar una página creada antes de importar la extensión y otra creada después. Mantener los imports oficiales de Playwright.
 - [ ] Registrar `expect_window()` antes del clic web, esperar Java, editar los tres campos con datos de prueba y pulsar **Confirmar** mediante la API accesible.
 - [ ] Comprobar cierre de Java y valores en la web; obtener el PDF mediante la API pública de solicitudes de Playwright y verificar sus tres valores con pypdf. Inspeccionar también la vista previa del PDF.
-- [ ] Repetir el recorrido con `playwright.async_api` usando `async with` y `await`, con un heartbeat que compruebe que la espera nativa no bloquea el event loop.
-- [ ] Comprobar una ventana existente, dos ventanas indistinguibles, bridge deshabilitado y cierre prematuro de Java. Las pruebas que alteren la configuración JAB son opt-in y deben restaurar su estado anterior.
+- [ ] Si se añade un ejemplo async, mantenerlo como recorrido funcional separado. El heartbeat y las comprobaciones de concurrencia corresponden a las pruebas del motor, no al ejemplo.
+- [ ] Verificar ventanas indistinguibles, bridge deshabilitado y cierre prematuro en las pruebas de la librería. No añadir casos que comprueben la infraestructura de automatización de la demo.
 - [ ] Ejecutar las pruebas nativas en serie. La captura de ventanas no debe atribuir automáticamente ventanas de otros procesos a una página.
-- [ ] Desde `lib/`, ejecutar las pruebas Windows de forma explícita con `py -m unittest discover -s tests/windows -p "test_*.py" -v`, en la sesión interactiva preparada. Un prerrequisito ausente debe informar qué falta, sin registrar la prueba como completada.
+- [ ] Desde la raíz del repositorio, ejecutar `py demo/pc-info-automation/run.py` en una sesión interactiva preparada. Un prerrequisito ausente debe informar qué falta y devolver un código de error.
 
 ## Tarea 7 — distribución, documentación y medidas
 
-**Archivos:** actualizar `lib/README.md`, README principal, documentación técnica y `.gitignore`; añadir `lib/benchmarks/measure_java.py` solo para medir las operaciones implementadas.
+**Archivos:** actualizar `lib/README.md`, README principal, documentación técnica y `.gitignore`; añadir `demo/pc-info-automation/benchmark.py` solo para medir las operaciones implementadas.
 
 - [ ] Verificar instalación del wheel fuera del repositorio, en CPython 3.10 y 3.14 convencionales x64 y Playwright 1.63.0 y 1.65.2. Ampliar versiones declaradas solo después de comprobarlas.
 - [ ] Medir en release inicialización, búsquedas, lecturas, ediciones y acciones; guardar p50/p95, número de muestras y condiciones de ejecución. Separar ClickOnce, JVM, motor y PDF.

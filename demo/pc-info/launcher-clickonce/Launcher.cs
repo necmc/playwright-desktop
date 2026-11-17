@@ -44,10 +44,13 @@ internal static class Launcher
             var jar = Path.Combine(directory, "InformationForm.jar");
             if (!File.Exists(java)) throw new FileNotFoundException("No se encontró Java. Vuelve a compilar indicando -JavaHome con la carpeta de OpenJDK.");
             if (!File.Exists(jar)) throw new FileNotFoundException("La publicación no contiene InformationForm.jar.");
+            var bridgeOptions = String.Equals(ConfigurationManager.AppSettings["EnableAccessBridge"], "true", StringComparison.OrdinalIgnoreCase)
+                ? "-Djavax.accessibility.assistive_technologies=com.sun.java.accessibility.AccessBridge -Djavax.accessibility.screen_magnifier_present=true "
+                : "";
             var start = new ProcessStartInfo
             {
                 FileName = java,
-                Arguments = "-jar \"" + jar + "\" \"" + operation.AbsoluteUri + "\"",
+                Arguments = bridgeOptions + "-jar \"" + jar + "\" \"" + operation.AbsoluteUri + "\"",
                 WorkingDirectory = directory,
                 UseShellExecute = false
             };

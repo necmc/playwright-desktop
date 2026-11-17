@@ -2,9 +2,9 @@
 
 [Volver al README](../README.md)
 
-La preparación, ejecución y pruebas manuales de la demo están en su [README propio](../demo/informacion-equipo/README.md).
+La preparación, ejecución y pruebas de las demos están en [demo/README.md](../demo/README.md).
 
-El objetivo de playwright-desktop es integrar Playwright Python con aplicaciones de escritorio invocadas desde una web. La implementación actual corresponde a la demo; `lib/` está reservada para la futura API reutilizable. Cada demo tiene su propia carpeta dentro de `demo/`. El caso actual está en `demo/informacion-equipo/`, con los componentes `web/`, `desktop-java/` y `launcher-clickonce/`.
+playwright-desktop integra Playwright Python con aplicaciones de escritorio invocadas desde una web. `lib/` contiene la base Python/Rust de `page.desktop`. Cada demo tiene su propia carpeta dentro de `demo/`. El caso actual está en `demo/pc-info/`, con los componentes `web/`, `desktop-java/` y `launcher-clickonce/`; su automatización está en `demo/pc-info-automation/`.
 
 ## Responsabilidades
 
@@ -14,7 +14,7 @@ El objetivo de playwright-desktop es integrar Playwright Python con aplicaciones
 | JavaScript | Solicitar la activación ClickOnce y consultar el resultado de la operación. |
 | Lanzador C# | Leer los argumentos de activación y ejecutar el JAR con el runtime Java configurado. |
 | Formulario Java | Precargar los datos del equipo, permitir su edición y devolverlos a la web. |
-| Librería Python | Integrar las acciones web y de escritorio en una misma prueba. Su API queda pendiente de implementación. |
+| Librería Python/Rust | Extender Page con `page.desktop` y ejecutar las acciones semánticas mediante Java Access Bridge. |
 
 ## Flujo de la demo
 
@@ -67,7 +67,7 @@ El lanzador se compila con `/nowin32manifest`. El manifiesto Win32 que `csc` inc
 
 La publicación de esta demo local se genera sin firma. Las advertencias de firma del registro recibido no eran la causa de `RefDefValidation`.
 
-Dentro de `demo/informacion-equipo/`, `start.ps1` prepara las dependencias Python, llama a `launcher-clickonce/build.ps1` y ejecuta Flask en primer plano, con el mismo puerto utilizado para la publicación. Comprueba que el puerto esté disponible y detiene la preparación si falla un paso. El servidor arranca sin recarga automática para mantener un único proceso que se detiene con `Ctrl+C`.
+Dentro de `demo/pc-info/`, `start.ps1` prepara las dependencias Python, llama a `launcher-clickonce/build.ps1` y ejecuta Flask en primer plano, con el mismo puerto utilizado para la publicación. Comprueba que el puerto esté disponible y detiene la preparación si falla un paso. El servidor arranca sin recarga automática para mantener un único proceso que se detiene con `Ctrl+C`.
 
 La dirección predeterminada es `http://127.0.0.1:18765`. El parámetro `-Port` de `start.ps1` configura conjuntamente la web y la publicación ClickOnce.
 
@@ -85,13 +85,60 @@ El lanzador obtiene la ruta Java de su archivo de configuración, distribuido co
 | Orquestador y servidor HTTP | Arranque verificado, puerto configurable, publicación y URL de activación coherentes; parada con `Ctrl+C` comprobada. |
 | Compilación Java y C# y generación de manifiestos | Verificadas; Java se compila con destino 11. |
 | Corrección de `RefDefValidation` | Publicación recompilada y ausencia de la identidad Win32 conflictiva comprobada en el ejecutable. |
-| Activación ClickOnce desde Edge | El registro recibido confirma que llegó a descargar y validar el ejecutable, donde falló antes de la corrección. Falta repetir la activación corregida. |
-| Ejecución con OpenJDK, edición en Java, retorno a la web y vista previa del PDF | Pendientes de comprobar en un recorrido completo. |
-| Librería de Playwright Python | Pendiente de implementación. |
+| Activación ClickOnce | El controlador del sistema descargó la publicación e inició el lanzador y Java. La captura posterior de la ventana agotó el plazo; la activación normal desde Edge sigue pendiente. |
+| Java directo con OpenJDK y retorno HTTP | Seis casos técnicos pasaron previamente; retirados de la demo para mantener solo el escenario funcional. Vista previa visual pendiente. |
+| Librería Python/Rust | Wheel construido e instalado; 19 pruebas Python, 4 Rust y contraste del ABI aprobados. Matriz de versiones y regresiones adicionales pendientes. |
 
-Las pruebas del backend verifican el contenido textual del PDF. La revisión visual del PDF y las interacciones de escritorio siguen pendientes. La última comprobación visual automatizada se detuvo al no poder determinar la URL del navegador con suficiente certeza.
+Las pruebas del backend verifican el contenido textual del PDF. La revisión visual y el recorrido completo siguen pendientes. El [estado del corte](pendientes.md) registra los resultados parciales, los límites y las siguientes tareas.
 
 ## Herramientas de desarrollo
+
+### Desarrollo de la librería
+
+La instalación de usuario se documenta con `pip install playwright-desktop`. Para compilar se necesita Python global, Maturin, Rust MSVC y las herramientas C++ de Visual Studio. Desde la raíz:
+
+```powershell
+.\lib\scripts\build_py.ps1
+```
+
+El script elimina por completo `lib/rust/target/python/` y `lib/dist/python/` antes de ejecutar `maturin build`. Si la limpieza falla, la compilación se detiene. El wheel nuevo queda en `lib/dist/python/`. La limpieza afecta únicamente a Python. No instala dependencias ni ejecuta pruebas. Las pruebas Rust se ejecutan por separado:
+
+```powershell
+cargo test --manifest-path lib/rust/Cargo.toml
+```
+
+Las pruebas internas Python se ejecutan con:
+
+```powershell
+py -m unittest discover -s lib/tests -v
+```
+
+El estado de validación y el trabajo restante se mantienen en [pendientes.md](pendientes.md). Las instrucciones de instalación del README describen el consumo del paquete; no acreditan una publicación en PyPI.
+
+### Publicación en PyPI
+
+Configura `MATURIN_PYPI_TOKEN` en el `.env` de la raíz y ejecuta:
+
+```powershell
+.\lib\scripts\publish_py.ps1
+```
+
+El script carga el token y ejecuta `maturin publish`, que compila y sube el wheel a PyPI en un solo comando. Usa `lib/rust/target/python/` para la compilación y `lib/dist/python/` para el wheel. Maturin lee la versión desde `pyproject.toml`. `-WhatIf` muestra la acción sin ejecutarla. Al terminar se restaura el token anterior del entorno. El sufijo `_py` identifica los scripts de Python.
+
+El wheel incluye el paquete `playwright_desktop` y sus metadatos. `lib/README.md` se incorpora como descripción de PyPI; los README del repositorio y de la demo no se empaquetan. Las dependencias PDF pertenecen a la demo, no al paquete publicado.
+
+Ambos scripts aplican el [remapeo de rutas de Rust](https://doc.rust-lang.org/rustc/remap-source-paths.html) para evitar incluir ubicaciones del proyecto y del caché Cargo. Maturin elimina símbolos de depuración y tiene desactivado el SBOM Rust automático porque contenía referencias locales. La revisión del wheel reconstruido comprobó sus archivos, metadatos, hashes y ausencia de rutas locales y credenciales; la importación fuera del repositorio y las 19 pruebas Python pasaron contra ese wheel.
+
+Las salidas se separan por SDK; actualmente solo está implementado Python:
+
+| SDK | Salida |
+| --- | --- |
+| Python | `lib/dist/python/` |
+| JavaScript / TypeScript (Node.js) | `lib/dist/node/` |
+| Java | `lib/dist/java/` |
+| .NET | `lib/dist/dotnet/` |
+
+### Herramientas del agente
 
 Las skills de `.agents/skills/` apoyan el trabajo del agente y no son dependencias de ejecución de la demo. `skills-lock.json` registra sus fuentes y revisiones. Los directorios de compilación, publicación y herramientas descargadas se excluyen de Git mediante `.gitignore`.
 
@@ -106,7 +153,7 @@ Las skills de `.agents/skills/` apoyan el trabajo del agente y no son dependenci
 
 ## Diseño de la librería
 
-El usuario eligió extender el `Page` oficial mediante `page.desktop`. La [propuesta de arquitectura Python y Rust](superpowers/specs/2026-11-17-libreria-python-rust-design.md) define el monkey patch, el paquete mixto y un motor Windows con Java Access Bridge para Swing. El [plan de implementación](superpowers/plans/2026-11-17-libreria-python-rust.md) ordena su construcción y verificación. Ambos documentos corresponden al diseño; la librería aún no está implementada.
+La [arquitectura Python y Rust](superpowers/specs/2026-11-17-libreria-python-rust-design.md) define el monkey patch, el paquete mixto y el motor Windows con Java Access Bridge para Swing. La base está implementada. El [plan de referencia](superpowers/plans/2026-11-17-libreria-python-rust.md) conserva el alcance previsto; el [seguimiento actualizado](pendientes.md) divide lo restante en tareas pequeñas.
 
 ## Diseño y plan
 

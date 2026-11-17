@@ -15,7 +15,7 @@ La demo permitirá recorrer una operación completa entre una web Python, un lan
 - Los campos incluyen la fecha actual, un dato local del PC y un alias.
 - Al confirmar en Java, los datos regresan a la web y se genera y previsualiza un PDF.
 - Los componentes de la demo pertenecen a este repositorio.
-- Cada demo ocupa su propia carpeta dentro de `demo/`. Este caso completo pertenece a `demo/informacion-equipo/`. La librería de Playwright Python tendrá su carpeta raíz `lib/`.
+- Cada demo ocupa su propia carpeta dentro de `demo/`. Este caso completo pertenece a `demo/pc-info/`. La librería de Playwright Python tendrá su carpeta raíz `lib/`.
 
 ## Enfoque adoptado
 
@@ -80,13 +80,13 @@ La configuración inicial es local, con Flask en `127.0.0.1:18765` y puerto conf
 - Microsoft.DotNet.Mage 10.0.0 para generar los manifiestos, instalado localmente mediante el SDK de .NET 9 o superior.
 - Microsoft Edge para comprobar la activación real desde una página web.
 
-`demo/informacion-equipo/start.ps1` prepara las dependencias, compila los componentes, publica ClickOnce y arranca Flask en primer plano. Su parámetro `-Port` configura la misma dirección para la web y la publicación. Las instrucciones de uso están en el [README de la demo](../../../demo/informacion-equipo/README.md).
+`demo/pc-info/start.ps1` prepara las dependencias, compila los componentes, publica ClickOnce y arranca Flask en primer plano. Su parámetro `-Port` configura la misma dirección para la web y la publicación. Las instrucciones de uso están en el [README de demos](../../../demo/README.md).
 
 ## Alcance de la implementación
 
-Todos los componentes de esta demo se implementan en `demo/informacion-equipo/`, con sus pruebas y configuración. Se dividen en `web/`, `desktop-java/` y `launcher-clickonce/`. Las clases y el JAR se generan en `desktop-java/build/`. La publicación y Mage pertenecen a `launcher-clickonce/publish/` y `launcher-clickonce/.tools/`. La API de la librería se desarrollará después de verificar este recorrido completo.
+Todos los componentes de esta demo se implementan en `demo/pc-info/`, con sus pruebas y configuración. Se dividen en `web/`, `desktop-java/` y `launcher-clickonce/`. Las clases y el JAR se generan en `desktop-java/build/`. La publicación y Mage pertenecen a `launcher-clickonce/publish/` y `launcher-clickonce/.tools/`. La API de la librería se desarrollará después de verificar este recorrido completo.
 
-`demo/informacion-equipo/README.md` contiene la ejecución, configuración, estructura de archivos y pruebas propias de la demo. El README principal presenta la librería y su API. Los detalles de arquitectura y del intercambio entre componentes pertenecen a la documentación técnica.
+`demo/README.md` centraliza el objetivo, contenido, ejecución y pruebas de las demos. El README principal presenta la librería y su API. Los detalles de arquitectura y del intercambio entre componentes pertenecen a la documentación técnica.
 
 ## Verificación requerida
 

@@ -1,18 +1,18 @@
 # playwright-desktop — arquitectura Python y Rust
 
-Estado: propuesta de arquitectura para revisión. Este documento no describe una implementación existente. El usuario eligió `page.desktop` como punto de entrada público.
+Estado: arquitectura de referencia de la base Python/Rust implementada. El recorrido completo sigue en validación; consultar el [estado del corte](../../pendientes.md). El punto de entrada público es `page.desktop`.
 
 ## Objetivo y límites
 
 Una importación de `playwright_desktop` amplía las clases públicas `Page` de Playwright Python. Los usuarios mantienen sus imports de Playwright, sus fixtures y sus instrucciones web. Las instancias creadas antes de importar la extensión también reciben el atributo añadido a su clase.
 
-La primera versión controla el formulario Swing de la [demo existente](../../../demo/informacion-equipo/), en Windows x64 y OpenJDK 11+. El motor es Rust, expuesto mediante PyO3. `windows-rs` proporciona las llamadas de Windows y Java Access Bridge proporciona acceso semántico a los controles Java.
+La primera versión controla el formulario Swing de la [demo existente](../../../demo/pc-info/), en Windows x64 y OpenJDK 11+. El motor es Rust, expuesto mediante PyO3. `windows-rs` proporciona las llamadas de Windows y Java Access Bridge proporciona acceso semántico a los controles Java.
 
 El alcance inicial comprende localizar una ventana, seleccionar controles por rol y nombre accesible exactos, leer y reemplazar texto, invocar un botón y esperar el cierre de una ventana. Las pruebas de escritorio se ejecutan en serie en una sesión interactiva de Windows. La librería no implementará OCR, grabador, un lenguaje de selectores, entrada por coordenadas, un servicio HTTP local, control de instaladores ni una plataforma general de automatización.
 
 ## Enfoque y alternativas
 
-Se propone un backend Java Access Bridge integrado en el proceso Python mediante Rust. `windows-rs` enumera ventanas, obtiene PID y título y carga las funciones de la DLL del bridge. Las llamadas JAB consultan y accionan los controles Swing. El runtime OpenJDK usado por la demo contiene `windowsaccessbridge-64.dll` y `jabswitch.exe`; falta comprobar el bridge con la aplicación en ejecución.
+El backend Java Access Bridge se integra en el proceso Python mediante Rust. `windows-rs` enumera ventanas, obtiene PID y título y carga las funciones de la DLL del bridge. Las llamadas JAB consultan y accionan los controles Swing. El runtime OpenJDK usado por la demo contiene `windowsaccessbridge-64.dll` y `jabswitch.exe`; la lectura, edición y confirmación en Java abierto directamente ya se comprobaron.
 
 UI Automation de Windows es apropiado para controles que expongan su árbol UIA, pero no se asumirá que un formulario Swing ofrece ese árbol. Un backend UIA para otras aplicaciones queda fuera de la primera versión. Controlar teclado y coordenadas permitiría algunas acciones, pero no proporciona la búsqueda semántica requerida para verificar campos y botones. Introducir un agente dentro de Java exigiría modificar las aplicaciones bajo prueba.
 
@@ -53,12 +53,27 @@ lib/
     test_patch.py
     test_api.py
     test_async.py
-    windows/test_java.py
-    windows/test_demo.py
-  dist/                         Wheels generados, excluidos de Git
+  dist/                         Artefactos generados, excluidos de Git
+    python/                     Wheels Python
+    node/                       Salida futura JavaScript/TypeScript
+    java/                       Salida futura Java
+    dotnet/                     Salida futura .NET
+demo/README.md                  Objetivo, contenido y ejecución de las demos
+demo/pc-info-automation/
+  models.py                     Datos de fecha, equipo y alias
+  run.py                        Comando único del escenario funcional
+  pages/                        Page Objects de web y formulario Java
+  support/                      Configuración, fixtures y recursos técnicos
+  tests/                        Escenario funcional y aserciones web/PDF
 ```
 
 La separación corresponde a responsabilidades concretas. La lógica de selección y actuación pertenece a Rust; Python adapta la API y las excepciones. Los módulos sync y async comparten modelos y el mismo contrato nativo. No se creará una jerarquía de backends antes de necesitar una segunda implementación.
+
+Cada build limpia únicamente sus artefactos. Python utiliza `dist/python/` y `rust/target/python/`; sus scripts no eliminan las carpetas de otros SDK.
+
+La automatización de la demo sigue Page Object Model (POM) con un único escenario funcional. El test muestra la importación, configuración y captura con `page.desktop` y conserva las aserciones. El Page Object Java recibe el mismo `page`, obtiene su ventana con `page.desktop.window()` y encapsula locators y acciones. Se ejecuta con `py demo/pc-info-automation/run.py`, sin variables especiales ni descubrimiento manual. Las comprobaciones del motor y de concurrencia pertenecen a las pruebas de la librería.
+
+Cada demo conserva su aplicación en `demo/<nombre>/` y todos los flujos que utilizan la librería en `demo/<nombre>-automation/`. Las pruebas internas de la librería pertenecen a `lib/tests/`.
 
 ## Configuración de distribución propuesta
 
@@ -82,14 +97,15 @@ classifiers = [
   "Programming Language :: Rust",
 ]
 
-[project.optional-dependencies]
-test = ["pypdf==7.1.0"]
-
 [tool.maturin]
 manifest-path = "rust/Cargo.toml"
 python-source = "python"
 module-name = "playwright_desktop._native"
 bindings = "pyo3"
+strip = true
+
+[tool.maturin.sbom]
+rust = false
 ```
 
 `lib/rust/Cargo.toml`:
@@ -255,4 +271,4 @@ Rust reduce el trabajo del adaptador y permite agrupar consultas, pero la comuni
 
 ## Decisiones de esta propuesta
 
-El usuario ha fijado `page.desktop`, Python, Rust, PyO3, `windows-rs`, monkey patching al importar y la demo Java como punto de partida. Se propone un paquete mixto dentro de `lib/`, sync y async desde el mismo contrato Rust, un solo backend JAB y pruebas nativas seriales. El [plan de implementación](../plans/2026-11-17-libreria-python-rust.md) detalla los entregables; aún no se ha construido la librería.
+La base implementada utiliza `page.desktop`, Python, Rust, PyO3, `windows-rs`, monkey patching al importar y un backend JAB. El [plan de implementación](../plans/2026-11-17-libreria-python-rust.md) conserva el alcance previsto; el [estado y los pendientes](../../pendientes.md) distinguen las verificaciones realizadas del trabajo restante.

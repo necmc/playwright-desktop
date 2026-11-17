@@ -53,7 +53,7 @@ def create_app() -> Flask:
     def create_operation():
         manifest = Path(app.config["PUBLISH_DIRECTORY"]) / "InformationDemo.application"
         if not manifest.is_file():
-            return jsonify(error="Compila la demo con demo/informacion-equipo/launcher-clickonce/build.ps1 antes de abrir la aplicación."), 503
+            return jsonify(error="Compila la demo con demo/pc-info/launcher-clickonce/build.ps1 antes de abrir la aplicación."), 503
         operation_id = store.create()
         operation_url = url_for("operation_status", operation_id=operation_id, _external=True)
         launch_url = url_for(
@@ -94,7 +94,7 @@ def create_app() -> Flask:
     def operation_document(operation_id):
         return send_file(
             BytesIO(store.document(operation_id)), mimetype="application/pdf",
-            download_name="informacion-equipo.pdf",
+            download_name="pc-info.pdf",
         )
 
     return app

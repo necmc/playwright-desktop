@@ -2,6 +2,15 @@
 /.venv/
 __pycache__/
 *.py[cod]
-/demo/informacion-equipo/desktop-java/build/
-/demo/informacion-equipo/launcher-clickonce/publish/
-/demo/informacion-equipo/launcher-clickonce/.tools/
+/demo/pc-info/desktop-java/build/
+/demo/pc-info/launcher-clickonce/publish/
+/demo/pc-info/launcher-clickonce/.tools/
+/lib/.tools/
+/lib/rust/target/
+/lib/dist/
+*.egg-info/
+
+# Ignore environment variable files
+.env
+.env.*
+!.env.example
