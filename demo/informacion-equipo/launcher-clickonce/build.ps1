@@ -72,7 +72,7 @@ if (Test-Path -LiteralPath $applicationManifest) { Remove-Item -LiteralPath $app
 if ($LASTEXITCODE -ne 0) { throw 'No se pudo generar el manifiesto de aplicación.' }
 $deploymentManifest = Join-Path $publishRoot 'InformationDemo.application'
 $providerUrl = $BaseUrl.TrimEnd('/') + '/clickonce/InformationDemo.application'
-& $mage -New Deployment -ToFile $deploymentManifest -Name 'Información del equipo' -Version $buildVersion -Processor amd64 -AppManifest $applicationManifest -AppCodeBase "$payloadRelative/InformationDemo.exe.manifest" -ProviderUrl $providerUrl -Install false -TrustURLParameters true -Publisher 'QA Automation Interop'
+& $mage -New Deployment -ToFile $deploymentManifest -Name 'Información del equipo' -Version $buildVersion -Processor amd64 -AppManifest $applicationManifest -AppCodeBase "$payloadRelative/InformationDemo.exe.manifest" -ProviderUrl $providerUrl -Install false -TrustURLParameters true -Publisher 'playwright-desktop'
 if ($LASTEXITCODE -ne 0) { throw 'No se pudo generar la publicación ClickOnce.' }
 
 Write-Output "Publicación lista en $publishRoot"

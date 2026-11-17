@@ -2,7 +2,9 @@
 
 [Volver al README](../README.md)
 
-El objetivo de QA Automation Interop es integrar Playwright Python con aplicaciones de escritorio invocadas desde una web. La implementación actual corresponde a la demo; `lib/` está reservada para la futura API reutilizable. Cada demo tiene su propia carpeta dentro de `demo/`. El caso actual está en `demo/informacion-equipo/`, con los componentes `web/`, `desktop-java/` y `launcher-clickonce/`.
+La preparación, ejecución y pruebas manuales de la demo están en su [README propio](../demo/informacion-equipo/README.md).
+
+El objetivo de playwright-desktop es integrar Playwright Python con aplicaciones de escritorio invocadas desde una web. La implementación actual corresponde a la demo; `lib/` está reservada para la futura API reutilizable. Cada demo tiene su propia carpeta dentro de `demo/`. El caso actual está en `demo/informacion-equipo/`, con los componentes `web/`, `desktop-java/` y `launcher-clickonce/`.
 
 ## Responsabilidades
 
@@ -102,9 +104,9 @@ Las skills de `.agents/skills/` apoyan el trabajo del agente y no son dependenci
 - Asociar cada ventana y resultado con la operación que los inició.
 - Separar las pruebas del contrato HTTP, la ejecución directa del lanzador y la activación real desde el navegador.
 
-## Decisiones pendientes de la librería
+## Diseño de la librería
 
-La API pública de Playwright Python, la tecnología de control de la ventana Java y el formato reutilizable de resultados y evidencias se definirán a partir del recorrido verificado de la demo.
+El usuario eligió extender el `Page` oficial mediante `page.desktop`. La [propuesta de arquitectura Python y Rust](superpowers/specs/2026-11-17-libreria-python-rust-design.md) define el monkey patch, el paquete mixto y un motor Windows con Java Access Bridge para Swing. El [plan de implementación](superpowers/plans/2026-11-17-libreria-python-rust.md) ordena su construcción y verificación. Ambos documentos corresponden al diseño; la librería aún no está implementada.
 
 ## Diseño y plan
 

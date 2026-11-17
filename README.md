@@ -1,72 +1,43 @@
-# QA Automation Interop
+# playwright-desktop
 
-Proyecto para crear una librería de Playwright Python que integre pruebas web con aplicaciones de escritorio invocadas desde el navegador.
+Extiende el `Page` oficial de Playwright Python con `page.desktop` para interactuar con aplicaciones de escritorio.
 
-Actualmente estamos preparando la demo. `lib/` contiene únicamente su README; la librería todavía no está implementada.
+## Instalación
 
-## Demo de información del equipo
-
-La demo incluye una web Python, un lanzador C# con ClickOnce y un formulario Java. El flujo previsto es pulsar **Obtener información**, editar la fecha, el nombre del equipo y el alias en Java y pulsar **Confirmar** para devolverlos a la web y previsualizarlos en un PDF.
-
-Se verificaron la compilación, el arranque del servidor y las pruebas del backend. Falta validar el recorrido completo desde el navegador hasta Java y el PDF tras la corrección del manifiesto ClickOnce. El [estado de verificación](docs/documentacion-tecnica.md#estado-de-verificación) detalla el alcance comprobado.
-
-### Preparar y ejecutar
-
-Requiere Windows x64, PowerShell, Python 3.10+ con pip, un JDK 11+ para compilar, OpenJDK 11+ para ejecutar, .NET Framework 4.8 y un SDK de .NET 9 o superior para instalar y ejecutar Mage.
-
-Desde la raíz del repositorio, en PowerShell:
+**Pendiente de implementación:** `lib/` todavía contiene solo documentación. El comando de instalación local previsto, una vez implementado y empaquetado, es:
 
 ```powershell
-.\demo\informacion-equipo\start.ps1
+py -m pip install --user ./lib
 ```
 
-El script [start.ps1](demo/informacion-equipo/start.ps1) instala las dependencias de Python global, compila el JAR y el lanzador C#, genera la publicación ClickOnce y arranca Flask. La primera preparación necesita acceso a PyPI y NuGet para descargar las dependencias que falten. Mantén la terminal abierta y usa `Ctrl+C` para detener la web.
+Los requisitos de construcción están definidos en la [arquitectura](docs/superpowers/specs/2026-11-17-libreria-python-rust-design.md#configuración-de-distribución-propuesta).
 
-Para probarla, abre en Microsoft Edge la dirección que muestre la terminal; por defecto, [http://127.0.0.1:18765](http://127.0.0.1:18765). Pulsa **Obtener información** y atiende la solicitud de apertura de ClickOnce. Los tres campos de la web muestran los datos devueltos por Java.
+## Uso básico
 
-Java precarga la fecha actual, el nombre del equipo y el alias `Usuario demo`. Las operaciones caducan a los veinte minutos y se pierden al detener el servidor.
+La sintaxis definida se utiliza sobre un `page` que ya tengas creado con Playwright:
 
-### Configuración
+```python
+import playwright_desktop
 
-El script configura el mismo puerto para la web y ClickOnce. Si el puerto está ocupado, detén el servidor anterior o elige otro:
-
-```powershell
-.\demo\informacion-equipo\start.ps1 -Port 18766
+window = page.desktop.window(title="Mi aplicación")
+window.get_by_role("textbox", name="Nombre").fill("Valor")
+window.get_by_role("button", name="Aceptar").click()
 ```
 
-Puedes indicar `-JdkHome 'C:\ruta\jdk'`, `-JavaHome 'C:\ruta\openjdk'` y `-Python 'C:\ruta\python.exe'` según tu instalación. Por defecto se usa `py` para Python. Para compilar Java, se usa `JAVA_HOME` o se busca `javac` en el `PATH`. Para ejecutar, se usa `JAVA_HOME`; si no está definido, el script busca OpenWebStart en la ruta local configurada y, en su defecto, utiliza el JDK. Indica `-JavaHome` para seleccionar explícitamente OpenJDK.
+Para Java en Windows, `JAVA_HOME` debe apuntar a un runtime OpenJDK con Java Access Bridge habilitado. También puedes indicar la ruta con `page.desktop.configure(java_home="C:/ruta/openjdk")`.
 
-Cada ejecución recompila los componentes y genera una versión ClickOnce nueva. Reinicia el script después de cambiar el código.
+Con la API asíncrona de Playwright, utiliza `await` en acciones como `fill()` y `click()`. Los imports y las acciones web habituales se conservan.
 
-### Carpetas
+## Estructura
 
 ```text
-lib/                              Reservada para la futura librería
-demo/
-  informacion-equipo/             Demo de consulta del equipo
-    start.ps1                     Preparar todo y arrancar la demo manual
-    web/                          Flask, formulario, PDF y pruebas
-      templates/                  Página web
-      static/                     Estilos y JS de activación ClickOnce
-    desktop-java/
-      src/                        Formulario Java
-      build/                      Clases y JAR compilados
-    launcher-clickonce/
-      Launcher.cs                 Lanzador C#
-      build.ps1                   Compilación de Java y publicación ClickOnce
-      publish/                    Manifiestos y archivos para ClickOnce
-      .tools/                     Mage instalado por el script
+lib/     Librería Python y motor Rust
+demo/    Ejemplos de integración y sus pruebas
+docs/    Arquitectura y plan de implementación
 ```
 
-Cada nueva demo tendrá su propia carpeta en `demo/`. `build/`, `publish/` y `.tools/` son archivos generados, excluidos de Git y contenidos en el componente correspondiente.
+## Más información
 
-### Pruebas del backend
-
-```powershell
-py -m pip install --user -r demo/informacion-equipo/web/requirements-test.txt
-py -m unittest discover -s demo/informacion-equipo/web -p test_app.py -v
-```
-
-## Documentación técnica
-
-La [documentación técnica](docs/documentacion-tecnica.md) explica la arquitectura y el intercambio entre componentes.
+- [Demos: preparación, ejecución y pruebas](demo/README.md).
+- [API y arquitectura](docs/superpowers/specs/2026-11-17-libreria-python-rust-design.md).
+- [Plan de implementación](docs/superpowers/plans/2026-11-17-libreria-python-rust.md).

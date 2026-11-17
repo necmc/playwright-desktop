@@ -22,7 +22,7 @@ def create_report(data: dict[str, str]) -> bytes:
     document = SimpleDocTemplate(
         output, pagesize=A4, rightMargin=52, leftMargin=52,
         topMargin=56, bottomMargin=52, title="Información del equipo",
-        author="QA Automation Interop",
+        author="playwright-desktop",
     )
     title_style = ParagraphStyle("Title", fontName="DemoSans", fontSize=22, leading=28)
     text_style = ParagraphStyle("Value", fontName="DemoSans", fontSize=11, leading=17)
@@ -42,7 +42,7 @@ def create_report(data: dict[str, str]) -> bytes:
         ("RIGHTPADDING", (0, 0), (-1, -1), 12),
     ]))
     document.build([
-        Paragraph("QA Automation Interop", muted_style), Spacer(1, 22),
+        Paragraph("playwright-desktop", muted_style), Spacer(1, 22),
         Paragraph("Información del equipo", title_style), Spacer(1, 12),
         Paragraph("Datos confirmados en la aplicación de escritorio.", muted_style),
         Spacer(1, 28), table,

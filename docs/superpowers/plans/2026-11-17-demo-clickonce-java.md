@@ -62,7 +62,7 @@ Archivos `demo/informacion-equipo/launcher-clickonce/Launcher.cs` y `demo/inform
 - [x] Proporcionar `demo/informacion-equipo/start.ps1` para preparar dependencias, compilar los componentes y arrancar Flask con un solo comando. Se verificaron el arranque desde otra carpeta, el puerto configurable, HTTP 200, creación de operaciones, coherencia de la publicación, rechazo de puerto ocupado y parada con Ctrl+C. El arranque predeterminado quedó verificado en `18765`.
 - [ ] Probar desde Edge la activación ClickOnce y observar Java.
 - [ ] Editar los campos, confirmar y comprobar valores en la web y en el PDF.
-- [x] Actualizar README con ejecución, compilación, configuración y archivos de la demo propia.
+- [x] Documentar ejecución, compilación, configuración, archivos y pruebas en `demo/informacion-equipo/README.md`, con un índice en `demo/README.md`.
 - [x] Mantener los detalles internos en la documentación técnica y crear `lib/README.md`.
 - [ ] Ejecutar una revisión final independiente y corregir hallazgos antes de entregar.
 
