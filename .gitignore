@@ -1,0 +1,7 @@
+/.agents/skills/skill-creator/
+/.venv/
+__pycache__/
+*.py[cod]
+/demo/informacion-equipo/desktop-java/build/
+/demo/informacion-equipo/launcher-clickonce/publish/
+/demo/informacion-equipo/launcher-clickonce/.tools/

@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Información del equipo · QA Automation Interop</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+    <script type="module" src="{{ url_for('static', filename='app.js') }}"></script>
+  </head>
+  <body>
+    <header><strong>QA Automation Interop</strong><span>Demo local</span></header>
+    <main>
+      <section class="information" aria-labelledby="page-title">
+        <h1 id="page-title">Información del equipo</h1>
+        <form id="information-form">
+          <label for="date">Fecha</label>
+          <input id="date" name="date" type="text" readonly placeholder="Pendiente de obtener">
+          <label for="computerName">Nombre del equipo</label>
+          <input id="computerName" name="computerName" type="text" readonly placeholder="Pendiente de obtener">
+          <label for="alias">Alias</label>
+          <input id="alias" name="alias" type="text" readonly placeholder="Pendiente de obtener">
+          <button id="obtain-button" type="submit">Obtener información</button>
+        </form>
+        <p id="operation-status" role="status" aria-live="polite">Listo para obtener los datos desde la aplicación de escritorio.</p>
+        <a id="launch-link" hidden>Abrir aplicación</a>
+      </section>
+      <section class="preview" aria-label="Vista previa del PDF">
+        <div class="preview-heading"><h2>Documento PDF</h2><a id="pdf-link" target="_blank" rel="noopener" hidden>Abrir PDF</a></div>
+        <p id="preview-placeholder">El PDF aparecerá aquí cuando confirmes los datos en la aplicación.</p>
+        <iframe id="pdf-viewer" title="Vista previa de la información confirmada" hidden></iframe>
+      </section>
+    </main>
+  </body>
+</html>
