@@ -4,6 +4,8 @@ Corte del 17 de noviembre de 2026. La implementación queda guardada como base i
 
 ## Verificado en este corte
 
+- Publicación `0.1.0` confirmada en la API pública de PyPI. El aviso de obsolescencia de `maturin publish` no invalida esa subida. El script de publicación se migró a `build_py.ps1` (Maturin) y `twine upload`; no se volvió a publicar la versión existente.
+
 - Wheel Windows x64 construido e instalado en Python global: Python 3.14.4, Playwright 1.63.0, Rust 1.100.0 y Maturin 1.16.0.
 - Parche automático `Page.desktop`, fachadas sync/async, errores y validaciones, binding PyO3 y worker Rust con Java Access Bridge.
 - 19 pruebas Python y 4 pruebas Rust aprobadas; layout del ABI contrastado con headers reales del JDK.

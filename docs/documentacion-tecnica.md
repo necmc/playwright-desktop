@@ -113,21 +113,21 @@ Las pruebas internas Python se ejecutan con:
 py -m unittest discover -s lib/tests -v
 ```
 
-El estado de validación y el trabajo restante se mantienen en [pendientes.md](pendientes.md). Las instrucciones de instalación del README describen el consumo del paquete; no acreditan una publicación en PyPI.
+El estado de validación y el trabajo restante se mantienen en [pendientes.md](pendientes.md). La versión [0.1.0 está publicada en PyPI](https://pypi.org/project/playwright-desktop/0.1.0/).
 
 ### Publicación en PyPI
 
-Configura `MATURIN_PYPI_TOKEN` en el `.env` de la raíz y ejecuta:
+Instala Twine una vez con `pip install twine`. Configura `MATURIN_PYPI_TOKEN` en el `.env` de la raíz y ejecuta:
 
 ```powershell
 .\lib\scripts\publish_py.ps1
 ```
 
-El script carga el token y ejecuta `maturin publish`, que compila y sube el wheel a PyPI en un solo comando. Usa `lib/rust/target/python/` para la compilación y `lib/dist/python/` para el wheel. Maturin lee la versión desde `pyproject.toml`. `-WhatIf` muestra la acción sin ejecutarla. Al terminar se restaura el token anterior del entorno. El sufijo `_py` identifica los scripts de Python.
+El script reutiliza `build_py.ps1` para compilar con Maturin y sube el wheel de `lib/dist/python/` mediante `twine upload`. Conserva el token existente en `.env` y restaura las variables de autenticación al terminar. `-WhatIf` muestra la acción sin ejecutarla. Los comandos `maturin publish` y `maturin upload` están [obsoletos](https://github.com/PyO3/maturin/issues/2334); Maturin se utiliza para la compilación. Para publicar cambios posteriores a `0.1.0`, incrementa la versión del paquete.
 
 El wheel incluye el paquete `playwright_desktop` y sus metadatos. `lib/README.md` se incorpora como descripción de PyPI; los README del repositorio y de la demo no se empaquetan. Las dependencias PDF pertenecen a la demo, no al paquete publicado.
 
-Ambos scripts aplican el [remapeo de rutas de Rust](https://doc.rust-lang.org/rustc/remap-source-paths.html) para evitar incluir ubicaciones del proyecto y del caché Cargo. Maturin elimina símbolos de depuración y tiene desactivado el SBOM Rust automático porque contenía referencias locales. La revisión del wheel reconstruido comprobó sus archivos, metadatos, hashes y ausencia de rutas locales y credenciales; la importación fuera del repositorio y las 19 pruebas Python pasaron contra ese wheel.
+El build aplica el [remapeo de rutas de Rust](https://doc.rust-lang.org/rustc/remap-source-paths.html) para evitar incluir ubicaciones del proyecto y del caché Cargo. Maturin elimina símbolos de depuración y tiene desactivado el SBOM Rust automático porque contenía referencias locales. La revisión del wheel reconstruido comprobó sus archivos, metadatos, hashes y ausencia de rutas locales y credenciales; la importación fuera del repositorio y las 19 pruebas Python pasaron contra ese wheel.
 
 Las salidas se separan por SDK; actualmente solo está implementado Python:
 
