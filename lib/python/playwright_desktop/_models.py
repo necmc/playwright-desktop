@@ -1,22 +1,22 @@
 """Validation shared by synchronous and asynchronous facades."""
 
 from dataclasses import dataclass
-import math
+
+MAX_TIMEOUT_MS = 2**32 - 1
+MAX_PROCESS_ID = 2**32 - 1
+MAX_TEXT_UNITS = 1023
 
 
 def validate_string(value: str, label: str) -> str:
     if not isinstance(value, str) or not value or "\0" in value:
         raise ValueError(f"{label} must be a nonempty string without NUL characters.")
-    try:
-        value.encode("utf-16-le")
-    except UnicodeEncodeError as error:
-        raise ValueError(f"{label} contains invalid Unicode.") from error
+    _utf16(value, label)
     return value
 
 
 def validate_timeout(value: float) -> float:
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0 or value > 2**32 - 1:
-        raise ValueError("timeout must be a finite number between 0 and 4294967295 milliseconds.")
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 <= value <= MAX_TIMEOUT_MS:
+        raise ValueError(f"timeout must be a finite number between 0 and {MAX_TIMEOUT_MS} milliseconds.")
     return value
 
 
@@ -27,7 +27,9 @@ class WindowQuery:
 
     def __post_init__(self):
         validate_string(self.title, "title")
-        if self.pid is not None and (isinstance(self.pid, bool) or not isinstance(self.pid, int) or not 0 < self.pid <= 2**32 - 1):
+        if self.pid is not None and (
+            isinstance(self.pid, bool) or not isinstance(self.pid, int) or not 0 < self.pid <= MAX_PROCESS_ID
+        ):
             raise ValueError("pid must be a positive Windows process identifier.")
 
 
@@ -37,12 +39,20 @@ def validate_control(role: str, name: str) -> None:
     validate_string(name, "name")
 
 
+def validate_action_role(role: str, required_role: str, action: str) -> None:
+    if role != required_role:
+        raise ValueError(f"{action}() requires the {required_role} role.")
+
+
 def validate_text(text: str) -> None:
     if not isinstance(text, str) or "\0" in text:
         raise ValueError("text must be a string without NUL characters.")
+    if len(_utf16(text, "text")) // 2 > MAX_TEXT_UNITS:
+        raise ValueError(f"Java Access Bridge accepts at most {MAX_TEXT_UNITS} UTF-16 code units.")
+
+
+def _utf16(value: str, label: str) -> bytes:
     try:
-        size = len(text.encode("utf-16-le")) // 2
+        return value.encode("utf-16-le")
     except UnicodeEncodeError as error:
-        raise ValueError("text contains invalid Unicode.") from error
-    if size > 1023:
-        raise ValueError("Java Access Bridge accepts at most 1023 UTF-16 code units.")
+        raise ValueError(f"{label} contains invalid Unicode.") from error

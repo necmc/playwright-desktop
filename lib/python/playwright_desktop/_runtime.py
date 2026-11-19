@@ -1,19 +1,28 @@
 """Lazy binding access. Playwright objects never cross the native worker boundary."""
 
 import asyncio
+from contextlib import contextmanager
 import importlib
-import math
 import os
 from pathlib import Path
 import struct
 import sys
 import sysconfig
-from time import monotonic
 from threading import Lock, get_ident
 import weakref
 
-from ._errors import DesktopError, DesktopClosedError, DesktopConfigurationError, DesktopTimeoutError, NATIVE_ERRORS, UnsupportedPlatformError
+from ._errors import (
+    DesktopClosedError,
+    DesktopConfigurationError,
+    DesktopError,
+    DesktopTimeoutError,
+    NATIVE_ERRORS,
+    UnsupportedPlatformError,
+)
 from ._models import WindowQuery, validate_timeout
+from ._timing import DEFAULT_TIMEOUT_MS, Deadline
+
+_BINDING_TIMEOUT = "The desktop request timed out while initializing its binding."
 
 _lock = Lock()
 _engine = None
@@ -31,7 +40,7 @@ def _get_engine():
             except ImportError as error:
                 raise DesktopError("The native extension is not installed. Build and install the playwright-desktop wheel.") from error
             _native_error = native.NativeError
-            _engine = native.Engine()
+            _engine = _native_call(native.Engine)
         return _engine
 
 
@@ -58,7 +67,7 @@ class Session:
         self._id = None
         self._closed = False
         self._captured_window: tuple[WindowQuery, int] | None = None
-        self.default_timeout = 10_000
+        self.default_timeout = DEFAULT_TIMEOUT_MS
         owner = weakref.ref(self)
 
         def on_close(*_):
@@ -102,45 +111,58 @@ class Session:
             raise DesktopConfigurationError("Capture a window with page.desktop.expect_window() first.")
         return self._captured_window
 
-    def prepare(self, timeout):
-        self._check_owner()
-        timeout = self.timeout(timeout)
-        started = monotonic()
-        if self._id is None:
-            java_home = self._java_home or os.environ.get("JAVA_HOME")
-            if not java_home:
-                raise DesktopConfigurationError("Set JAVA_HOME or call page.desktop.configure(java_home=...).")
-            engine = _get_engine()
-            session_id = _native_call(engine.open_session, str(Path(java_home).expanduser().absolute()))
-            self._engine, self._id = engine, session_id
-        if timeout:
-            timeout -= (monotonic() - started) * 1000
-            if timeout <= 0:
-                raise DesktopTimeoutError("The desktop request timed out while initializing its binding.")
-        return self._engine, _native_call(self._engine.new_request, self._id, math.ceil(timeout))
+    def _runtime_path(self) -> str:
+        if self._java_home is not None:
+            return self._java_home
+        if java_home := os.environ.get("JAVA_HOME"):
+            return str(Path(java_home).expanduser().absolute())
+        raise DesktopConfigurationError("Set JAVA_HOME or call page.desktop.configure(java_home=...).")
+
+    def _open_session(self, engine, java_home: str) -> None:
+        self._id = _native_call(engine.open_session, java_home)
+        self._engine = engine
+
+    def _new_request(self, deadline: Deadline):
+        remaining = deadline.remaining_ms(_BINDING_TIMEOUT)
+        return _native_call(self._engine.new_request, self._id, remaining)
 
     def call(self, operation, *, timeout=None, **parameters):
-        engine, request = self.prepare(timeout)
-        return _invoke(engine, request, operation, parameters)
+        self._check_owner()
+        deadline = Deadline(self.timeout(timeout))
+        if self._id is None:
+            java_home = self._runtime_path()
+            self._open_session(_get_engine(), java_home)
+        request = self._new_request(deadline)
+        return _invoke(self._engine, request, operation, parameters)
 
     async def call_async(self, operation, *, timeout=None, **parameters):
         self._check_owner()
-        timeout = self.timeout(timeout)
-        started = monotonic()
-        if self._engine is None:
+        deadline = Deadline(self.timeout(timeout))
+        if self._id is None:
+            java_home = self._runtime_path()
+            startup_budget = deadline.remaining_ms(_BINDING_TIMEOUT) or DEFAULT_TIMEOUT_MS
             try:
-                await asyncio.wait_for(asyncio.to_thread(_get_engine), (timeout or 10_000) / 1000)
+                engine = await asyncio.wait_for(asyncio.to_thread(_get_engine), startup_budget / 1000)
             except asyncio.TimeoutError as error:
                 raise DesktopTimeoutError("The native binding did not initialize before the deadline.") from error
-        if timeout:
-            timeout -= (monotonic() - started) * 1000
-            if timeout <= 0:
-                raise DesktopTimeoutError("The desktop request timed out while initializing its binding.")
-        engine, request = self.prepare(timeout)
+            self._check_owner()
+            deadline.remaining_ms(_BINDING_TIMEOUT)
+            # Another coroutine can open this session while the engine starts.
+            if self._id is None:
+                self._open_session(engine, java_home)
+        request = self._new_request(deadline)
         try:
-            return await asyncio.to_thread(_invoke, engine, request, operation, parameters)
+            return await asyncio.to_thread(_invoke, self._engine, request, operation, parameters)
         except asyncio.CancelledError:
             request.cancel()
+            raise
+
+    @contextmanager
+    def capture_completion(self, capture_id: int, deadline: Deadline):
+        try:
+            yield deadline.remaining_ms("The desktop window capture timed out during the web action.")
+        except BaseException:
+            self.cancel_capture(capture_id)
             raise
 
     def cancel_capture(self, capture_id):

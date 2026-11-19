@@ -72,6 +72,15 @@ class NativeTests(unittest.TestCase):
             self.engine.new_request(session, 100)
         self.assertEqual(error.exception.args[0], "CLOSED")
 
+    def test_unknown_operation_is_reported_as_configuration_error(self):
+        session = self.engine.open_session(str(self.home))
+        self.addCleanup(self.engine.close_session, session)
+        request = self.engine.new_request(session, 1000)
+        with self.assertRaises(self.native.NativeError) as error:
+            self.engine.invoke(request, "unsupported")
+        self.assertEqual(error.exception.args[0], "CONFIGURATION")
+        self.assertIn("Unsupported native operation", error.exception.args[1])
+
 
 if __name__ == "__main__":
     unittest.main()

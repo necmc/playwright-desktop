@@ -29,7 +29,7 @@ class ApiTests(unittest.TestCase):
     def test_timeout_validation_accepts_zero_and_rejects_nonfinite_values(self):
         self.assertEqual(validate_timeout(0), 0)
         self.assertEqual(validate_timeout(1.5), 1.5)
-        for value in (-1, True, "100", float("nan"), float("inf")):
+        for value in (-1, True, "100", float("nan"), float("inf"), 10**1000):
             with self.assertRaises(ValueError):
                 validate_timeout(value)
 
@@ -71,6 +71,22 @@ class ApiTests(unittest.TestCase):
         self.assertEqual([call.args[0] for call in request.call_args_list],
                          ["prepare", "capture", "fill", "click", "wait_closed"])
         self.assertEqual([call.kwargs["window_id"] for call in request.call_args_list[2:]], [2, 2, 2])
+
+    def test_expired_capture_cancels_the_reservation_without_waiting_again(self):
+        page = FakePage()
+        session = Session(page)
+        desktop = Desktop(session)
+        with (
+            patch.object(session, "call", return_value=SimpleNamespace(handle=7)) as request,
+            patch.object(session, "cancel_capture") as cancel,
+            patch("playwright_desktop._timing.monotonic", side_effect=(1.0, 1.1)),
+        ):
+            with self.assertRaises(DesktopTimeoutError):
+                with desktop.expect_window(title="Información del equipo", timeout=50):
+                    pass
+
+        request.assert_called_once_with("prepare", title="Información del equipo", pid=None, timeout=50)
+        cancel.assert_called_once_with(7)
 
 
 if __name__ == "__main__":

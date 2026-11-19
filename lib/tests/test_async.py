@@ -1,11 +1,12 @@
 import asyncio
+import os
 from threading import Event, get_ident
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
 from playwright_desktop._async import Desktop
-from playwright_desktop._errors import DesktopTimeoutError, BridgeUnavailableError
+from playwright_desktop._errors import BridgeUnavailableError, DesktopConfigurationError, DesktopTimeoutError
 from playwright_desktop._runtime import Session
 from test_patch import FakePage
 
@@ -52,7 +53,7 @@ class AsyncTests(unittest.IsolatedAsyncioTestCase):
         self.desktop = Desktop(self.session)
         self.engine = Engine()
         self.engine_patch = patch("playwright_desktop._runtime._get_engine", return_value=self.engine)
-        self.engine_patch.start()
+        self.load_engine = self.engine_patch.start()
 
     async def asyncTearDown(self):
         self.engine.release.set()
@@ -88,6 +89,24 @@ class AsyncTests(unittest.IsolatedAsyncioTestCase):
         await self.desktop.window(title="My window").get_by_role("textbox", name="Alias").input_value()
         self.page.callbacks["close"]()
         self.assertEqual(self.engine.closed, [1])
+
+    async def test_cold_request_uses_the_engine_returned_by_the_background_load(self):
+        self.engine.release.set()
+        alias = self.desktop.window(title="My window").get_by_role("textbox", name="Alias")
+        self.assertEqual(await alias.input_value(), "Álias \U00010400")
+        self.load_engine.assert_called_once_with()
+
+    async def test_missing_java_home_is_reported_before_loading_the_engine(self):
+        page = FakePage()
+        session = Session(page)
+        desktop = Desktop(session)
+        self.addCleanup(session.close_nowait)
+        with patch.dict(os.environ):
+            os.environ.pop("JAVA_HOME", None)
+            with self.assertRaisesRegex(DesktopConfigurationError, "JAVA_HOME"):
+                async with desktop.expect_window(title="My window"):
+                    self.fail("Capture should require a runtime directory.")
+        self.load_engine.assert_not_called()
 
     async def test_native_timeout_preserves_its_original_cause(self):
         class NativeFailure(Exception):

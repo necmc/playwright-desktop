@@ -46,7 +46,7 @@ impl Object {
     }
 
     fn info(&self) -> Result<Box<ContextInfo>> {
-        let mut info = zeroed_box::<ContextInfo>();
+        let mut info = ContextInfo::zeroed();
         // SAFETY: info has the checked C layout and writable capacity.
         if unsafe { (self.0.library.info)(self.0.vm, self.0.object, &mut *info) } == 0 {
             return Err(Failure::new("STALE", "The Java accessible context is no longer available."));
@@ -136,7 +136,7 @@ impl Object {
     }
 
     pub fn click(&self, check: &dyn Fn() -> Result<()>) -> Result<()> {
-        let mut actions = zeroed_box::<Actions>();
+        let mut actions = Actions::zeroed();
         // SAFETY: actions has the checked header layout and this context is still live.
         if unsafe { (self.0.library.actions)(self.0.vm, self.0.object, &mut *actions) } == 0 || !(1..=256).contains(&actions.count) {
             return Err(Failure::new("ACTION", "The Java button exposes no supported accessible action."));
@@ -147,7 +147,7 @@ impl Object {
         }
         let index = selected.or(if actions.count == 1 { Some(0) } else { None })
             .ok_or_else(|| Failure::new("ACTION", "The button's accessible action is ambiguous."))?;
-        let mut todo = zeroed_box::<ActionsToDo>();
+        let mut todo = ActionsToDo::zeroed();
         todo.count = 1;
         todo.actions[0] = actions.actions[index];
         let mut failed = -1;

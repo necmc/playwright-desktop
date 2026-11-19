@@ -54,10 +54,35 @@ pub type SetText = unsafe extern "C" fn(VmId, JavaObject, *const u16) -> i32;
 pub type GetActions = unsafe extern "C" fn(VmId, JavaObject, *mut Actions) -> i32;
 pub type DoActions = unsafe extern "C" fn(VmId, JavaObject, *mut ActionsToDo, *mut i32) -> i32;
 
-pub fn zeroed_box<T>() -> Box<T> {
+impl ContextInfo {
+    pub fn zeroed() -> Box<Self> {
+        // SAFETY: this struct contains only integers and arrays of integers.
+        unsafe { zeroed_box() }
+    }
+}
+
+impl Actions {
+    pub fn zeroed() -> Box<Self> {
+        // SAFETY: the count and each ActionInfo field permit all-zero bits.
+        unsafe { zeroed_box() }
+    }
+}
+
+impl ActionsToDo {
+    pub fn zeroed() -> Box<Self> {
+        // SAFETY: the count and each ActionInfo field permit all-zero bits.
+        unsafe { zeroed_box() }
+    }
+}
+
+// SAFETY: callers must guarantee that all-zero bits represent a valid T.
+unsafe fn zeroed_box<T>() -> Box<T> {
     let mut value = Box::<T>::new_uninit();
-    // SAFETY: only called for the repr(C) POD structures above, whose fields permit zero.
-    unsafe { value.as_mut_ptr().write_bytes(0, 1); value.assume_init() }
+    // SAFETY: the allocation fits T and the caller guarantees the representation is valid.
+    unsafe {
+        value.as_mut_ptr().write_bytes(0, 1);
+        value.assume_init()
+    }
 }
 
 #[cfg(test)]

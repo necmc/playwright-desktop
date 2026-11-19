@@ -1,6 +1,9 @@
 $ErrorActionPreference = 'Stop'
 $libraryRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $previousRustFlags = $env:CARGO_ENCODED_RUSTFLAGS
+$previousCargoHome = $env:CARGO_HOME
+$previousRustupHome = $env:RUSTUP_HOME
+$previousPath = $env:PATH
 Push-Location $libraryRoot
 try {
     foreach ($directory in @('rust/target/python', 'dist/python')) {
@@ -25,6 +28,9 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Falló la compilación del paquete Python.' }
 }
 finally {
+    $env:PATH = $previousPath
+    $env:RUSTUP_HOME = $previousRustupHome
+    $env:CARGO_HOME = $previousCargoHome
     $env:CARGO_ENCODED_RUSTFLAGS = $previousRustFlags
     Pop-Location
 }

@@ -31,6 +31,8 @@ lib/
     _patch.py                    Instalación, colisiones y desinstalación
     _sync.py                     Fachada síncrona de escritorio
     _async.py                    Fachada asíncrona de escritorio
+    _runtime.py                  Sesión por página y llamadas al motor
+    _timing.py                   Plazos monotónicos de captura y solicitudes
     _models.py                   Consultas y validación compartida
     _errors.py                   Excepciones públicas y traducción de errores nativos
     _native.pyi                  Contrato tipado de la extensión compilada

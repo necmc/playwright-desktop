@@ -4,10 +4,10 @@ use std::{collections::{HashMap, HashSet, VecDeque}, path::PathBuf, rc::Rc,
     sync::{Arc, Mutex, OnceLock, atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering}, mpsc::{self, Sender, Receiver}},
     time::{Duration, Instant}};
 
-pub struct SessionState { pub id: u64, pub closed: AtomicBool, java_home: String }
+struct SessionState { id: u64, closed: AtomicBool, java_home: String }
 
-pub struct RequestState {
-    pub id: u64,
+struct RequestState {
+    id: u64,
     session: Arc<SessionState>,
     deadline: Instant,
     immediate: bool,
@@ -24,7 +24,7 @@ impl RequestState {
     }
 }
 
-pub struct Shared {
+struct Shared {
     sender: Sender<Command>,
     sessions: Mutex<HashMap<u64, Arc<SessionState>>>,
     captures_cancelled: Mutex<HashSet<(u64, u64)>>,
@@ -40,9 +40,14 @@ pub struct Shared {
 static SHARED: OnceLock<Mutex<Option<Arc<Shared>>>> = OnceLock::new();
 
 #[derive(Default)]
-pub struct Arguments {
-    pub window_id: u64, pub capture_id: u64, pub title: String, pub pid: Option<u32>,
-    pub role: String, pub name: String, pub text: String,
+struct Arguments {
+    window_id: u64,
+    capture_id: u64,
+    title: String,
+    pid: Option<u32>,
+    role: String,
+    name: String,
+    text: String,
 }
 
 #[pyclass]
@@ -52,14 +57,45 @@ pub struct Reply {
     #[pyo3(get)] pub text: Option<String>,
 }
 
-pub struct Command {
-    request: Arc<RequestState>, operation: String, arguments: Arguments,
+#[derive(Clone, Copy)]
+enum Operation {
+    PrepareCapture,
+    CompleteCapture,
+    Window(WindowOperation),
+}
+
+impl Operation {
+    fn parse(name: &str) -> Result<Self> {
+        match name {
+            "prepare" => Ok(Self::PrepareCapture),
+            "capture" => Ok(Self::CompleteCapture),
+            "read_text" => Ok(Self::Window(WindowOperation::ReadText)),
+            "fill" => Ok(Self::Window(WindowOperation::Fill)),
+            "click" => Ok(Self::Window(WindowOperation::Click)),
+            "wait_closed" => Ok(Self::Window(WindowOperation::WaitClosed)),
+            _ => Err(Failure::new("CONFIGURATION", "Unsupported native operation.")),
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WindowOperation {
+    ReadText,
+    Fill,
+    Click,
+    WaitClosed,
+}
+
+struct Command {
+    request: Arc<RequestState>,
+    operation: Operation,
+    arguments: Arguments,
     reply: Sender<Result<Reply>>,
 }
 
 #[pyclass]
 #[derive(Clone)]
-pub struct Request { pub state: Arc<RequestState> }
+pub struct Request { state: Arc<RequestState> }
 
 #[pymethods]
 impl Request {
@@ -122,13 +158,14 @@ impl Engine {
               role: &str, name: &str, text: &str) -> PyResult<Reply> {
         self.healthy().map_err(as_python)?;
         request.state.check().map_err(as_python)?;
+        let operation = Operation::parse(operation).map_err(as_python)?;
         if self.shared.queued.fetch_add(1, Ordering::AcqRel) >= 64 {
             self.shared.queued.fetch_sub(1, Ordering::AcqRel);
             return Err(as_python(Failure::new("BUSY", "The native request queue is full.")));
         }
         let (sender, receiver) = mpsc::channel();
         let state = request.state.clone();
-        let command = Command { request: state.clone(), operation: operation.to_owned(),
+        let command = Command { request: state.clone(), operation,
             arguments: Arguments { window_id, capture_id, title: title.into(), pid, role: role.into(), name: name.into(), text: text.into() }, reply: sender };
         if self.shared.sender.send(command).is_err() {
             self.shared.queued.fetch_sub(1, Ordering::AcqRel);
@@ -265,7 +302,7 @@ impl Worker {
     }
 
     fn complete(&mut self, command: Command, result: Result<Reply>) {
-        if result.is_err() && command.operation == "capture" {
+        if result.is_err() && matches!(command.operation, Operation::CompleteCapture) {
             self.cancel(command.request.session.id, command.arguments.capture_id);
         }
         self.shared.queued.fetch_sub(1, Ordering::AcqRel);
@@ -346,53 +383,87 @@ impl Worker {
     }
 
     fn step(&mut self, command: &Command) -> Result<Option<Reply>> {
-        let session = command.request.session.id;
+        let request = &command.request;
         let args = &command.arguments;
-        command.request.check()?;
-        if command.operation == "prepare" {
-            if self.lease.is_some() { return Err(Failure::new("BUSY", "Another desktop flow is active. Close its window or desktop session first.")); }
-            self.library(&command.request)?;
-            let before = Self::matches(&args.title, args.pid)?.into_iter().map(|item| (item.hwnd, item.pid)).collect();
-            command.request.check()?;
-            let id = self.shared.next.fetch_add(1, Ordering::Relaxed);
-            self.captures.insert(id, Capture { session, title: args.title.clone(), pid: args.pid, before, request: command.request.clone() });
-            self.lease = Some(Lease { session, capture: id, window: 0 });
+        request.check()?;
+        match command.operation {
+            Operation::PrepareCapture => self.prepare_capture(request, args),
+            Operation::CompleteCapture => self.complete_capture(request, args.capture_id),
+            Operation::Window(operation) => self.operate_window(request, operation, args),
+        }
+    }
+
+    fn prepare_capture(&mut self, request: &Arc<RequestState>, args: &Arguments) -> Result<Option<Reply>> {
+        if self.lease.is_some() {
+            return Err(Failure::new("BUSY", "Another desktop flow is active. Close its window or desktop session first."));
+        }
+        self.library(request)?;
+        let before = Self::matches(&args.title, args.pid)?
+            .into_iter()
+            .map(|item| (item.hwnd, item.pid))
+            .collect();
+        request.check()?;
+        let session = request.session.id;
+        let id = self.shared.next.fetch_add(1, Ordering::Relaxed);
+        self.captures.insert(id, Capture {
+            session,
+            title: args.title.clone(),
+            pid: args.pid,
+            before,
+            request: request.clone(),
+        });
+        self.lease = Some(Lease { session, capture: id, window: 0 });
+        Ok(Some(Reply { handle: id, text: None }))
+    }
+
+    fn complete_capture(&mut self, request: &RequestState, capture_id: u64) -> Result<Option<Reply>> {
+        let capture = self.captures.get(&capture_id)
+            .filter(|capture| capture.session == request.session.id)
+            .ok_or_else(|| Failure::new("CLOSED", "The window capture is no longer active."))?;
+        let title = capture.title.clone();
+        let pid = capture.pid;
+        let before = capture.before.clone();
+        let Some(id) = self.discover(request, &title, pid, Some(&before))? else {
+            return Ok(None);
+        };
+        self.captures.remove(&capture_id);
+        Ok(Some(Reply { handle: id, text: None }))
+    }
+
+    fn resolve_window(&mut self, request: &RequestState, args: &Arguments) -> Result<Option<u64>> {
+        if args.window_id != 0 {
+            return Ok(Some(args.window_id));
+        }
+        let Some(lease) = &self.lease else {
+            return self.discover(request, &args.title, args.pid, None);
+        };
+        if lease.session != request.session.id || lease.window == 0 {
+            return Err(Failure::new("BUSY", "Another desktop flow is active."));
+        }
+        let item = self.windows.get(&lease.window)
+            .ok_or_else(|| Failure::new("STALE", "The desktop session's window is no longer available."))?;
+        if item.window.title != args.title || args.pid.is_some_and(|pid| pid != item.window.pid) {
+            return Err(Failure::new("BUSY", "This session is already bound to a different Java window."));
+        }
+        Ok(Some(lease.window))
+    }
+
+    fn operate_window(
+        &mut self, request: &RequestState, operation: WindowOperation, args: &Arguments,
+    ) -> Result<Option<Reply>> {
+        let Some(id) = self.resolve_window(request, args)? else {
+            return Ok(None);
+        };
+        let session = request.session.id;
+        let waiting_for_close = operation == WindowOperation::WaitClosed;
+        if waiting_for_close && self.closed.get(&id) == Some(&session) {
             return Ok(Some(Reply { handle: id, text: None }));
         }
-        if command.operation == "capture" {
-            let capture = self.captures.get(&args.capture_id).filter(|capture| capture.session == session)
-                .ok_or_else(|| Failure::new("CLOSED", "The window capture is no longer active."))?;
-            let title = capture.title.clone();
-            let pid = capture.pid;
-            let before = capture.before.clone();
-            if let Some(id) = self.discover(&command.request, &title, pid, Some(&before))? {
-                self.captures.remove(&args.capture_id);
-                return Ok(Some(Reply { handle: id, text: None }));
-            }
-            return Ok(None);
-        }
-        if !matches!(command.operation.as_str(), "read_text" | "fill" | "click" | "wait_closed") {
-            return Err(Failure::new("CONFIGURATION", "Unsupported native operation."));
-        }
-        let id = if args.window_id != 0 { args.window_id }
-        else {
-            if let Some(lease) = self.lease.as_ref() {
-                if lease.session != session || lease.window == 0 { return Err(Failure::new("BUSY", "Another desktop flow is active.")); }
-                let item = self.windows.get(&lease.window).unwrap();
-                if item.window.title != args.title || args.pid.is_some_and(|pid| pid != item.window.pid) {
-                    return Err(Failure::new("BUSY", "This session is already bound to a different Java window."));
-                }
-                lease.window
-            } else {
-                match self.discover(&command.request, &args.title, args.pid, None)? { Some(id) => id, None => return Ok(None) }
-            }
-        };
-        if command.operation == "wait_closed" && self.closed.get(&id) == Some(&session) { return Ok(Some(Reply { handle: id, text: None })); }
         let item = self.windows.get(&id).filter(|window| window.session == session)
             .ok_or_else(|| Failure::new("STALE", "This native window is closed or belongs to another session."))?;
         if !windows::valid(&item.window) {
             self.invalidate_window(id);
-            if command.operation == "wait_closed" { return Ok(Some(Reply { handle: id, text: None })); }
+            if waiting_for_close { return Ok(Some(Reply { handle: id, text: None })); }
             return Err(Failure::new("STALE", "The native window no longer exists."));
         }
         let library = self.library.as_ref().unwrap();
@@ -402,23 +473,23 @@ impl Worker {
                 self.invalidate_window(id);
                 return Err(Failure::new("STALE", "Windows reused the handle for a different Java window."));
             }
-        } else if command.operation != "wait_closed" {
+        } else if !waiting_for_close {
             self.invalidate_window(id);
             return Err(Failure::new("STALE", "The Java window is no longer accessible."));
         }
-        if command.operation == "wait_closed" { return Ok(None); }
+        if waiting_for_close { return Ok(None); }
         if !matches!(args.role.as_str(), "textbox" | "button") || args.name.is_empty() {
             return Err(Failure::new("CONFIGURATION", "A supported role and exact accessible name are required."));
         }
-        let check = || command.request.check();
+        let check = || request.check();
         let control = match item.root.find(&args.role, &args.name, &check)? { Some(control) => control, None => return Ok(None) };
         check()?;
-        if !control.ready(command.operation == "fill")? { return Ok(None); }
+        if !control.ready(operation == WindowOperation::Fill)? { return Ok(None); }
         let mut reply = Reply { handle: id, text: None };
-        match command.operation.as_str() {
-            "read_text" if args.role == "textbox" => reply.text = Some(control.text()?),
-            "fill" if args.role == "textbox" => control.fill(&args.text, &check)?,
-            "click" if args.role == "button" => control.click(&check)?,
+        match (operation, args.role.as_str()) {
+            (WindowOperation::ReadText, "textbox") => reply.text = Some(control.text()?),
+            (WindowOperation::Fill, "textbox") => control.fill(&args.text, &check)?,
+            (WindowOperation::Click, "button") => control.click(&check)?,
             _ => return Err(Failure::new("CONFIGURATION", "The action does not support this role.")),
         }
         Ok(Some(reply))
@@ -514,7 +585,7 @@ mod tests {
         let (reply, _result) = mpsc::channel();
         let action = Command {
             request,
-            operation: "click".into(),
+            operation: Operation::Window(WindowOperation::Click),
             arguments: Arguments { window_id: 2, role: "button".into(), name: "Confirmar".into(), ..Arguments::default() },
             reply,
         };
