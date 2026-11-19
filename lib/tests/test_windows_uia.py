@@ -65,7 +65,7 @@ class WindowsUiaTests(unittest.TestCase):
             os.environ.pop("JAVA_HOME", None)
             with playwright.chromium.launch(channel="msedge") as browser:
                 page = browser.new_page()
-                window = page.desktop.window(title=self.title, pid=self.pid)
+                window = page.desktop.window(pid=self.pid)
                 with page.desktop.expect_window(title=f"{self.title} - Opciones", pid=self.pid) as opened:
                     window.get_by_role("button", name="Mostrar opciones").click()
                 dialog = opened.value

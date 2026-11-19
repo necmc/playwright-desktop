@@ -25,15 +25,18 @@ def validate_timeout(value: float) -> float:
 
 @dataclass(frozen=True)
 class WindowQuery:
-    title: str
+    title: str | None
     pid: int | None = None
 
     def __post_init__(self):
-        validate_string(self.title, "title")
         if self.pid is not None and (
             isinstance(self.pid, bool) or not isinstance(self.pid, int) or not 0 < self.pid <= MAX_PROCESS_ID
         ):
             raise ValueError("pid must be a positive process identifier.")
+        if self.title is not None:
+            validate_string(self.title, "title")
+        elif self.pid is None:
+            raise ValueError("A window title or PID is required.")
 
 
 def validate_control(role: str, name: str) -> None:

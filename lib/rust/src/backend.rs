@@ -122,8 +122,8 @@ impl Backend {
     }
 
     pub(crate) fn candidates(title: &str, pid: Option<u32>) -> Result<Vec<WindowCandidate>> {
-        if title.is_empty() || title.contains('\0') {
-            return Err(Failure::new("CONFIGURATION", "An exact, nonempty window title is required."));
+        if (title.is_empty() && pid.is_none()) || title.contains('\0') {
+            return Err(Failure::new("CONFIGURATION", "An exact window title or PID is required."));
         }
         Ok(windows::list()?.into_iter().filter(|window| matches_window(window, title, pid))
             .map(WindowCandidate).collect())
@@ -192,7 +192,7 @@ impl Target {
 }
 
 fn matches_window(window: &windows::Window, title: &str, pid: Option<u32>) -> bool {
-    window.title == title && pid.is_none_or(|pid| window.pid == pid)
+    (title.is_empty() || window.title == title) && pid.is_none_or(|pid| window.pid == pid)
 }
 
 fn different_bridge() -> Failure {

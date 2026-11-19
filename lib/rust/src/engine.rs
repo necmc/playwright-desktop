@@ -432,7 +432,8 @@ impl Worker {
             .filter(|window| !capture.is_some_and(|(_, before)| before.contains(&window.key())));
         let Some(candidate) = candidates.next() else { return Ok(None); };
         if candidates.next().is_some() {
-            return Err(Failure::new("AMBIGUOUS", format!("More than one window matches {title:?}. Add a PID filter.")));
+            let filter = if title.is_empty() { "an exact title" } else { "a PID" };
+            return Err(Failure::new("AMBIGUOUS", format!("More than one window matches. Add {filter} to narrow the search.")));
         }
         request.check()?;
         if let Some((&id, _)) = self.windows.iter().find(|(_, item)| {

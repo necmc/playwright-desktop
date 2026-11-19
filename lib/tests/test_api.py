@@ -14,9 +14,10 @@ from test_patch import FakePage
 
 
 class ApiTests(unittest.TestCase):
-    def test_query_requires_an_exact_nonempty_title_and_positive_pid(self):
+    def test_query_requires_a_title_or_a_positive_pid(self):
         self.assertEqual(WindowQuery("My window", 42).title, "My window")
-        for title, pid in (("", None), ("My window", 0), ("My window", True)):
+        self.assertEqual(WindowQuery(None, 42).pid, 42)
+        for title, pid in ((None, None), ("", 42), ("My window", 0), ("My window", True)):
             with self.assertRaises(ValueError):
                 WindowQuery(title, pid)
 

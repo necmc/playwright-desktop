@@ -43,7 +43,7 @@ with page.expect_popup():
 
 Con Playwright asíncrono, usa `async with` y `await` en las acciones.
 
-Para una ventana que ya está abierta, usa `page.desktop.window(title="Opciones")` y busca sus controles con `get_by_role()`.
+Para una ventana que ya está abierta, usa `page.desktop.window(title="Opciones")`. Si conoces el PID y el proceso tiene una sola ventana visible con título, usa `page.desktop.window(pid=pid)`.
 
 ## Guardar la ventana
 

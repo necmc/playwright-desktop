@@ -5,7 +5,7 @@ from __future__ import annotations
 from os import PathLike
 
 from ._models import (
-    WindowQuery, validate_action_role, validate_click_role, validate_control, validate_scope, validate_text,
+    WindowQuery, validate_action_role, validate_click_role, validate_control, validate_scope, validate_string, validate_text,
 )
 from ._timing import Deadline
 
@@ -20,10 +20,11 @@ class Desktop:
     def set_default_timeout(self, timeout: float) -> None:
         self._session.set_default_timeout(timeout)
 
-    def window(self, *, title: str, pid: int | None = None) -> Window:
+    def window(self, *, title: str | None = None, pid: int | None = None) -> Window:
         return Window(self._session, WindowQuery(title, pid))
 
     def expect_window(self, *, title: str, pid: int | None = None, timeout: float | None = None) -> WindowExpectation:
+        validate_string(title, "title")
         return WindowExpectation(self._session, WindowQuery(title, pid), timeout)
 
     def get_by_role(self, role: str, *, name: str) -> Locator:
@@ -49,7 +50,7 @@ class Window:
         return Locator(self, role, name)
 
     def _call(self, operation, timeout=None, **parameters):
-        reply = self._session.call(operation, window_id=self._handle, title=self._query.title,
+        reply = self._session.call(operation, window_id=self._handle, title=self._query.title or "",
                                    pid=self._query.pid, timeout=timeout, **parameters)
         if reply.handle:
             self._handle = reply.handle
