@@ -1,3 +1,5 @@
+"""Extracción de texto del PDF generado por la demo."""
+
 from io import BytesIO
 
 from pypdf import PdfReader

@@ -40,7 +40,7 @@ Write-Host '[2/3] Compilando Java, el lanzador C# y la publicación ClickOnce...
 & $buildScript -BaseUrl $baseUrl -JavaHome $JavaHome -JdkHome $JdkHome -EnableAccessBridge:$EnableAccessBridge
 
 Write-Host "[3/3] Arrancando la web en $baseUrl"
-Write-Host 'Abre esta dirección en Microsoft Edge y pulsa Obtener información.'
+Write-Host 'Abre esta dirección en tu navegador y pulsa Obtener información.'
 Write-Host 'Mantén esta terminal abierta. Usa Ctrl+C para detener el servidor.'
 
 # Un único proceso de servidor en primer plano facilita detener la demo.

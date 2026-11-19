@@ -1,4 +1,4 @@
-"""Datos que comparten el formulario Java, la web y el PDF."""
+"""Objeto de transferencia de datos del formulario, la web y el PDF."""
 
 from dataclasses import dataclass
 

@@ -60,10 +60,12 @@ lib/
     dotnet/                     Salida futura .NET
 demo/README.md                  Objetivo, contenido y ejecución de las demos
 demo/pc-info-automation/
-  models.py                     Datos de fecha, equipo y alias
+  models/                       DTO de fecha, equipo y alias
+  config.py                     Dirección, plazo y runtime de la demo
   run.py                        Comando único del escenario funcional
   pages/                        Page Objects de web y formulario Java
-  support/                      Configuración, fixtures y recursos técnicos
+  fixtures/                     Selección, preparación y limpieza del navegador
+  utils/                        Lectura del texto del PDF
   tests/                        Escenario funcional y aserciones web/PDF
 ```
 
@@ -71,7 +73,7 @@ La separación corresponde a responsabilidades concretas. La lógica de selecci�
 
 Cada build limpia únicamente sus artefactos. Python utiliza `dist/python/` y `rust/target/python/`; sus scripts no eliminan las carpetas de otros SDK.
 
-La automatización de la demo sigue Page Object Model (POM) con un único escenario funcional. El test muestra la importación, configuración y captura con `page.desktop` y conserva las aserciones. El Page Object Java recibe el mismo `page`, obtiene su ventana con `page.desktop.window()` y encapsula locators y acciones. Se ejecuta con `py demo/pc-info-automation/run.py`, sin variables especiales ni descubrimiento manual. Las comprobaciones del motor y de concurrencia pertenecen a las pruebas de la librería.
+La automatización de la demo sigue Page Object Model (POM) con un único escenario funcional. El test muestra la importación, configuración y captura con `page.desktop` y conserva las aserciones. El Page Object Java recibe la ventana devuelta por `page.desktop.expect_window()` y encapsula locators y acciones. Se ejecuta con `py demo/pc-info-automation/run.py`, sin variables especiales ni descubrimiento manual. Las comprobaciones del motor y de concurrencia pertenecen a las pruebas de la librería.
 
 Cada demo conserva su aplicación en `demo/<nombre>/` y todos los flujos que utilizan la librería en `demo/<nombre>-automation/`. Las pruebas internas de la librería pertenecen a `lib/tests/`.
 

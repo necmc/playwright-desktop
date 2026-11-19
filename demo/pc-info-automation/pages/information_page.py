@@ -1,8 +1,8 @@
 from urllib.parse import urljoin
 
-from playwright.sync_api import Page, expect
+from playwright.sync_api import Page
 
-from models import EquipmentInformation
+from models.equipment_information import EquipmentInformation
 
 
 class InformationPage:
@@ -25,8 +25,10 @@ class InformationPage:
         self.launch_link.click()
 
     def wait_for_result(self) -> None:
-        expect(self.status).to_have_text("Información recibida. El PDF está listo.")
-        expect(self.pdf_viewer).to_be_visible()
+        self.pdf_viewer.wait_for(state="visible")
+
+    def result_message(self) -> str:
+        return self.status.inner_text()
 
     def read_information(self) -> EquipmentInformation:
         return EquipmentInformation(
@@ -38,8 +40,8 @@ class InformationPage:
     def download_pdf(self) -> bytes:
         address = self.pdf_viewer.get_attribute("src")
         if not address:
-            raise AssertionError("El visor no tiene una URL de PDF.")
+            raise RuntimeError("El visor no tiene una URL de PDF.")
         response = self.page.request.get(urljoin(self.base_url, address))
         if not response.ok:
-            raise AssertionError(f"No se pudo descargar el PDF: HTTP {response.status}.")
+            raise RuntimeError(f"No se pudo descargar el PDF: HTTP {response.status}.")
         return response.body()

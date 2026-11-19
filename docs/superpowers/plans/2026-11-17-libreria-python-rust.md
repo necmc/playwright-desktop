@@ -12,7 +12,7 @@
 
 ## Restricciones globales
 
-Actualización aprobada: la automatización de la demo utiliza **Page Object Model (POM)** y un único escenario funcional. El test contiene el recorrido, sus aserciones, la importación de `playwright_desktop` y las llamadas `page.desktop.configure()`, `set_default_timeout()` y `expect_window()`. El Page Object Java recibe el mismo `page` y utiliza `page.desktop.window()` con locators y acciones públicas. `support/` se limita a preparar y limpiar recursos. Mantener unittest, sin nuevas dependencias ni capas genéricas de acciones. Las pruebas del motor pertenecen a la librería, no a la automatización de ejemplo.
+La automatización de la demo utiliza **Page Object Model (POM)** y un único escenario funcional. El test contiene el recorrido, sus aserciones, la importación de `playwright_desktop` y las llamadas `page.desktop.configure()`, `set_default_timeout()` y `expect_window()`. El Page Object Java recibe la ventana capturada y encapsula los locators y las acciones. `fixtures/` prepara el navegador, `config.py` contiene la configuración y `utils/` extrae el texto del PDF. Mantener unittest, sin nuevas dependencias ni capas genéricas de acciones. Las pruebas del motor pertenecen a la librería.
 
 Refactorización acotada de la tarea 6:
 
@@ -115,7 +115,7 @@ La demo se llama `pc-info` y su automatización `pc-info-automation`. La ejecuci
 
 ## Tarea 6 — recorrido real de la demo
 
-**Archivos:** `demo/pc-info-automation/run.py` y `tests/test_information_flow.py`, con Page Objects en `pages/` y fixtures en `support/`. Instrucciones centralizadas en `demo/README.md`, único README de las demos. Los casos técnicos del motor se verifican como parte de la librería.
+**Archivos:** `demo/pc-info-automation/run.py` y `tests/test_flow.py`, con Page Objects en `pages/` y preparación en `fixtures/`. Instrucciones en `demo/README.md`, único README de las demos. Los casos técnicos del motor se verifican como parte de la librería.
 
 **Consume:** demo compilada, OpenJDK con JAB activo, Edge con activación ClickOnce disponible y wheel instalado. **Produce:** evidencia del recorrido que utiliza la clase oficial `Page` con una sola importación adicional.
 

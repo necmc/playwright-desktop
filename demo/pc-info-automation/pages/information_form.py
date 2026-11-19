@@ -1,17 +1,15 @@
-from playwright.sync_api import Page
-
-from models import EquipmentInformation
+from models.equipment_information import EquipmentInformation
 
 
 class InformationForm:
     TITLE = "Información del equipo"
 
-    def __init__(self, page: Page):
-        self.window = page.desktop.window(title=self.TITLE)
-        self.date = self.window.get_by_role("textbox", name="Fecha")
-        self.computer_name = self.window.get_by_role("textbox", name="Nombre del equipo")
-        self.alias = self.window.get_by_role("textbox", name="Alias")
-        self.confirm_button = self.window.get_by_role("button", name="Confirmar")
+    def __init__(self, window):
+        self.window = window
+        self.date = window.get_by_role("textbox", name="Fecha")
+        self.computer_name = window.get_by_role("textbox", name="Nombre del equipo")
+        self.alias = window.get_by_role("textbox", name="Alias")
+        self.confirm_button = window.get_by_role("button", name="Confirmar")
 
     def fill(self, information: EquipmentInformation) -> None:
         self.date.fill(information.date)

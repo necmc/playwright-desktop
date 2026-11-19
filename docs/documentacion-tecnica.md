@@ -71,6 +71,14 @@ Dentro de `demo/pc-info/`, `start.ps1` prepara las dependencias Python, llama a 
 
 La dirección predeterminada es `http://127.0.0.1:18765`. El parámetro `-Port` de `start.ps1` configura conjuntamente la web y la publicación ClickOnce.
 
+La automatización usa la demo en ejecución en el puerto predeterminado. El escenario obtiene de la publicación ClickOnce el runtime que necesita Java Access Bridge y comprueba el recorrido desde el navegador hasta el PDF.
+
+### Navegador de la automatización
+
+Se intenta usar el navegador predeterminado de Windows si es compatible con Chromium para Playwright. Si el predeterminado no es compatible, se intenta usar Edge o Chrome instalados, en ese orden. Chrome y Edge tienen soporte oficial en Playwright. Otros navegadores Chromium dependen de su versión, y el Firefox instalado por el usuario requiere una versión adaptada para que Playwright lo controle. [Navegadores de Playwright](https://playwright.dev/python/docs/browsers).
+
+Edge ofrece soporte nativo para ClickOnce. Para usar una extensión en otro navegador, abre un perfil de pruebas con `--user-data-dir` apuntando a la ruta que imprime la automatización. Instala allí la extensión de tu elección y cierra ese perfil antes de ejecutar `run.py`. Si ese perfil existe, se conserva para reutilizar la extensión. En los demás casos se usa un perfil temporal. [ClickOnce en Edge](https://learn.microsoft.com/en-us/deployedge/edge-learn-more-co-di) y [perfiles de pruebas de Playwright](https://playwright.dev/python/docs/api/class-browsertype#browser-type-launch-persistent-context).
+
 `launcher-clickonce/build.ps1` genera las clases y el JAR en `desktop-java/build/` y copia el JAR a la publicación de `launcher-clickonce/publish/`. Mage se instala en `launcher-clickonce/.tools/`. Flask sirve esa publicación mediante `/clickonce/`.
 
 La instalación de Mage utiliza `dotnet tool install --allow-roll-forward`, disponible desde el SDK de .NET 9, para permitir su ejecución en un runtime de .NET más reciente. [Compatibilidad de herramientas de .NET](https://learn.microsoft.com/dotnet/core/whats-new/dotnet-9/sdk#net-tool-roll-forward).
