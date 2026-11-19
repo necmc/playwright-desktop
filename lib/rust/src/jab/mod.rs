@@ -45,6 +45,10 @@ impl Object {
             && unsafe { (self.0.library.same)(self.0.vm, self.0.object, other.0.object) != 0 }
     }
 
+    pub(crate) fn refresh(&self, window: &windows::Window) -> Option<Self> {
+        Self::root(&self.0.library, window)
+    }
+
     fn info(&self) -> Result<Box<ContextInfo>> {
         let mut info = ContextInfo::zeroed();
         // SAFETY: info has the checked C layout and writable capacity.

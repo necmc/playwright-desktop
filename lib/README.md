@@ -8,7 +8,17 @@ Añade `page.desktop` al `Page` oficial de Playwright Python para interactuar co
 pip install playwright-desktop
 ```
 
-Requiere Python 3.10–3.14 y Windows x64.
+La versión mínima de Python es 3.10.
+
+## Compatibilidad actual
+
+| SO | Nativo | JVM |
+| --- | --- | --- |
+| Windows | | X |
+| macOS | | |
+| Linux | | |
+
+El soporte JVM actual cubre Java Swing en Windows x64 con Java Access Bridge habilitado.
 
 ## Sintaxis básica
 

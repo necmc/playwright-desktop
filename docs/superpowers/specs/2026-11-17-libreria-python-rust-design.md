@@ -29,6 +29,7 @@ lib/
   python/playwright_desktop/
     __init__.py                  Exportaciones y aplicación automática del parche
     _patch.py                    Instalación, colisiones y desinstalación
+    _backend.py                  Plataforma, carga y configuración del adaptador Python
     _sync.py                     Fachada síncrona de escritorio
     _async.py                    Fachada asíncrona de escritorio
     _runtime.py                  Sesión por página y llamadas al motor
@@ -44,6 +45,7 @@ lib/
     src/
       lib.rs                    Módulo PyO3 _native
       engine.rs                 Worker, comandos, plazos y ciclo de vida
+      backend.rs                Adaptador Windows con Java Access Bridge
       windows.rs                Descubrimiento y validación de ventanas y procesos
       jab/
         mod.rs                  Recorrido del árbol y acciones
@@ -71,7 +73,22 @@ demo/pc-info-automation/
   tests/                        Escenario funcional y aserciones web/PDF
 ```
 
-La separación corresponde a responsabilidades concretas. La lógica de selección y actuación pertenece a Rust; Python adapta la API y las excepciones. Los módulos sync y async comparten modelos y el mismo contrato nativo. No se creará una jerarquía de backends antes de necesitar una segunda implementación.
+Python expone `page.desktop` y asocia la sesión a una página de Playwright. El worker Rust gestiona plazos, solicitudes y reservas. El adaptador Rust descubre ventanas, conserva sus referencias nativas y ejecuta acciones. Los módulos sync y async comparten modelos y el contrato nativo.
+
+## Extensión a otras aplicaciones y sistemas
+
+Swing puede ejecutarse en distintos sistemas con su JVM. Java Access Bridge expone su accesibilidad externa mediante una DLL de Windows. En cada sistema se debe verificar que la aplicación publique los controles que prueba la librería. [Java Access Bridge](https://docs.oracle.com/en/java/javase/21/access/java-access-bridge-overview.html).
+
+| Entorno | Acceso a los controles |
+| --- | --- |
+| Windows con Swing | Java Access Bridge. Motor actual. |
+| Windows con controles nativos | Controles con proveedor de accesibilidad. [UI Automation](https://learn.microsoft.com/en-us/windows/win32/winauto/uiauto-uiautomationoverview). |
+| macOS | Autorización de accesibilidad del proceso. [AXUIElement](https://developer.apple.com/documentation/applicationservices/axuielement_h?language=o_5). |
+| Linux | Sesión con bus de accesibilidad. [AT-SPI sobre D-Bus](https://github.com/GNOME/at-spi2-core#accessibility-infrastructure). |
+
+La librería seleccionará el motor según el sistema y la arquitectura. Si Windows admite más de un motor, la selección también tendrá en cuenta cómo la ventana expone sus controles. La configuración Java y el límite de texto pertenecen al adaptador JAB. La ruta de UI Automation funcionará con su propia configuración.
+
+Cada adaptador traduce roles y acciones a la API del sistema y conserva allí sus identificadores nativos y reglas de hilo. `Page.desktop` sigue utilizando locators, plazos y errores públicos comunes. El puerto Rust común se extraerá al incorporar el segundo adaptador, con las operaciones que ambos demuestren necesitar. Cada plataforma validará su wheel y el contrato con una aplicación real.
 
 Cada build limpia únicamente sus artefactos. Python utiliza `dist/python/` y `rust/target/python/`; sus scripts no eliminan las carpetas de otros SDK.
 
@@ -216,8 +233,9 @@ flowchart LR
     D --> S[Fachada sync o async]
     S --> B[PyO3: datos y comandos]
     B --> W[Worker Rust con cola y bucle de mensajes]
-    W --> N[windows-rs: HWND, PID, carga de DLL]
-    W --> J[Java Access Bridge: árbol, texto y acciones]
+    W --> AD[Adaptador Windows y Java]
+    AD --> N[windows-rs: HWND, PID, carga de DLL]
+    AD --> J[Java Access Bridge: árbol, texto y acciones]
     J --> A[Formulario Swing]
 ```
 
@@ -237,7 +255,7 @@ Base de ABI y símbolos: [AccessBridgePackages.h](https://raw.githubusercontent.
 
 ### Descubrimiento, selección y acciones
 
-El motor enumera ventanas superiores visibles mediante `EnumWindows`, obtiene título y PID y filtra antes de consultar Java. Solo acepta una ventana JAB que coincida con el filtro. Cero coincidencias espera hasta el plazo; más de una produce un error de ambigüedad, sin escoger la primera.
+El adaptador enumera ventanas superiores visibles mediante `EnumWindows` y filtra por título y PID antes de consultar Java. El worker espera hasta el plazo cuando hay cero coincidencias, reserva la ventana cuando hay una y comunica un error de ambigüedad cuando hay varias.
 
 Cada ventana se vincula al HWND, proceso y contexto raíz Java obtenidos al adjuntarse. Antes de cada acción se comprueba que continúa siendo la misma ventana. Las consultas se vuelven a resolver contra su árbol y no conservan indefinidamente objetos de controles que pueden haberse reemplazado. Los roles y estados se normalizan desde sus variantes inglesas del bridge.
 

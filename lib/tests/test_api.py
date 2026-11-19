@@ -5,7 +5,8 @@ from unittest.mock import patch
 
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
-from playwright_desktop._errors import DesktopConfigurationError, DesktopTimeoutError
+from playwright_desktop import _backend
+from playwright_desktop._errors import DesktopConfigurationError, DesktopTimeoutError, UnsupportedPlatformError
 from playwright_desktop._models import WindowQuery, validate_control, validate_timeout, validate_text
 from playwright_desktop._runtime import Session
 from playwright_desktop._sync import Desktop
@@ -35,6 +36,19 @@ class ApiTests(unittest.TestCase):
 
     def test_native_timeout_can_be_caught_as_playwright_timeout(self):
         self.assertIsInstance(DesktopTimeoutError("timeout"), PlaywrightTimeoutError)
+
+    def test_unsupported_platforms_do_not_load_the_native_extension(self):
+        targets = (("linux", "linux-x86_64"), ("darwin", "macosx-14.0-arm64"), ("win32", "win-arm64"))
+        for platform, build_target in targets:
+            with (
+                self.subTest(target=build_target),
+                patch.object(_backend.sys, "platform", platform),
+                patch.object(_backend.sysconfig, "get_platform", return_value=build_target),
+                patch.object(_backend, "import_module") as load_extension,
+            ):
+                with self.assertRaises(UnsupportedPlatformError):
+                    _backend.load_extension()
+                load_extension.assert_not_called()
 
     def test_missing_java_home_is_reported_before_loading_the_engine(self):
         page = FakePage()

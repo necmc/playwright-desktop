@@ -2,22 +2,16 @@
 
 import asyncio
 from contextlib import contextmanager
-import importlib
-import os
-from pathlib import Path
-import struct
-import sys
-import sysconfig
 from threading import Lock, get_ident
 import weakref
 
+from . import _backend
 from ._errors import (
     DesktopClosedError,
     DesktopConfigurationError,
     DesktopError,
     DesktopTimeoutError,
     NATIVE_ERRORS,
-    UnsupportedPlatformError,
 )
 from ._models import WindowQuery, validate_timeout
 from ._timing import DEFAULT_TIMEOUT_MS, Deadline
@@ -33,12 +27,7 @@ def _get_engine():
     global _engine, _native_error
     with _lock:
         if _engine is None:
-            if sys.platform != "win32" or struct.calcsize("P") != 8 or sysconfig.get_config_var("Py_GIL_DISABLED"):
-                raise UnsupportedPlatformError("The native backend requires conventional CPython on Windows x64.")
-            try:
-                native = importlib.import_module("playwright_desktop._native")
-            except ImportError as error:
-                raise DesktopError("The native extension is not installed. Build and install the playwright-desktop wheel.") from error
+            native = _backend.load_extension()
             _native_error = native.NativeError
             _engine = _native_call(native.Engine)
         return _engine
@@ -89,10 +78,7 @@ class Session:
         self._check_owner()
         if self._id is not None:
             raise DesktopConfigurationError("Configure the Java runtime before the first desktop operation.")
-        path = os.fspath(java_home)
-        if not isinstance(path, str) or not path or "\0" in path:
-            raise ValueError("java_home must be a nonempty filesystem path.")
-        self._java_home = str(Path(path).expanduser().absolute())
+        self._java_home = _backend.normalize_java_home(java_home)
 
     def set_default_timeout(self, timeout):
         self._check_owner()
@@ -111,15 +97,8 @@ class Session:
             raise DesktopConfigurationError("Capture a window with page.desktop.expect_window() first.")
         return self._captured_window
 
-    def _runtime_path(self) -> str:
-        if self._java_home is not None:
-            return self._java_home
-        if java_home := os.environ.get("JAVA_HOME"):
-            return str(Path(java_home).expanduser().absolute())
-        raise DesktopConfigurationError("Set JAVA_HOME or call page.desktop.configure(java_home=...).")
-
-    def _open_session(self, engine, java_home: str) -> None:
-        self._id = _native_call(engine.open_session, java_home)
+    def _open_session(self, engine, backend_argument: str) -> None:
+        self._id = _native_call(engine.open_session, backend_argument)
         self._engine = engine
 
     def _new_request(self, deadline: Deadline):
@@ -130,8 +109,8 @@ class Session:
         self._check_owner()
         deadline = Deadline(self.timeout(timeout))
         if self._id is None:
-            java_home = self._runtime_path()
-            self._open_session(_get_engine(), java_home)
+            backend_argument = _backend.session_argument(self._java_home)
+            self._open_session(_get_engine(), backend_argument)
         request = self._new_request(deadline)
         return _invoke(self._engine, request, operation, parameters)
 
@@ -139,7 +118,7 @@ class Session:
         self._check_owner()
         deadline = Deadline(self.timeout(timeout))
         if self._id is None:
-            java_home = self._runtime_path()
+            backend_argument = _backend.session_argument(self._java_home)
             startup_budget = deadline.remaining_ms(_BINDING_TIMEOUT) or DEFAULT_TIMEOUT_MS
             try:
                 engine = await asyncio.wait_for(asyncio.to_thread(_get_engine), startup_budget / 1000)
@@ -149,7 +128,7 @@ class Session:
             deadline.remaining_ms(_BINDING_TIMEOUT)
             # Another coroutine can open this session while the engine starts.
             if self._id is None:
-                self._open_session(engine, java_home)
+                self._open_session(engine, backend_argument)
         request = self._new_request(deadline)
         try:
             return await asyncio.to_thread(_invoke, self._engine, request, operation, parameters)

@@ -1,10 +1,13 @@
-use crate::{error::{Failure, Result}, jab::{Object, loader::{Library, dll_path}}, windows};
+use crate::{
+    backend::{Backend, ControlAction, SessionOptions, TIMEOUT_MESSAGE, Target, WindowKey, WindowState},
+    error::{Failure, Result},
+};
 use pyo3::prelude::*;
-use std::{collections::{HashMap, HashSet, VecDeque}, path::PathBuf, rc::Rc,
+use std::{collections::{HashMap, HashSet, VecDeque},
     sync::{Arc, Condvar, Mutex, OnceLock, atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering}, mpsc::{self, Sender, Receiver}},
     time::{Duration, Instant}};
 
-struct SessionState { id: u64, closed: AtomicBool, java_home: String }
+struct SessionState { id: u64, closed: AtomicBool, options: SessionOptions }
 
 struct RequestState {
     session: Arc<SessionState>,
@@ -140,11 +143,9 @@ impl Engine {
 
     fn open_session(&self, java_home: &str) -> PyResult<u64> {
         self.healthy().map_err(as_python)?;
-        if java_home.is_empty() || java_home.contains('\0') || !std::path::Path::new(java_home).is_absolute() {
-            return Err(as_python(Failure::new("CONFIGURATION", "java_home must be an absolute runtime directory.")));
-        }
+        let options = SessionOptions::java(java_home).map_err(as_python)?;
         let id = self.shared.next.fetch_add(1, Ordering::Relaxed);
-        self.shared.sessions.lock().unwrap().insert(id, Arc::new(SessionState { id, closed: AtomicBool::new(false), java_home: java_home.into() }));
+        self.shared.sessions.lock().unwrap().insert(id, Arc::new(SessionState { id, closed: AtomicBool::new(false), options }));
         Ok(id)
     }
 
@@ -213,7 +214,7 @@ impl Shared {
                 if self.mark_stalled_call() {
                     Err(Failure::new("TIMEOUT", "A native bridge call exceeded its deadline; its effect may be unknown. Restart Python before using desktop actions again."))
                 } else {
-                    Err(Failure::new("TIMEOUT", "No unique accessible Java window or control became ready before the deadline. Check the title, PID and Java Access Bridge configuration."))
+                    Err(Failure::new("TIMEOUT", TIMEOUT_MESSAGE))
                 }
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
@@ -269,19 +270,18 @@ impl Shared {
     }
 }
 
-struct Capture { session: u64, title: String, pid: Option<u32>, before: HashSet<(isize, u32)>, request: Arc<RequestState> }
-struct BoundWindow { session: u64, window: windows::Window, root: Object }
+struct Capture { session: u64, title: String, pid: Option<u32>, before: HashSet<WindowKey>, request: Arc<RequestState> }
+struct BoundWindow { session: u64, target: Target }
 struct Lease { session: u64, capture: u64, window: u64 }
 
 struct Worker {
-    shared: Arc<Shared>, library: Option<Rc<Library>>, captures: HashMap<u64, Capture>,
+    shared: Arc<Shared>, backend: Backend, captures: HashMap<u64, Capture>,
     windows: HashMap<u64, BoundWindow>, closed: HashMap<u64, u64>, lease: Option<Lease>,
-    library_path: Option<PathBuf>, validated_sessions: HashSet<u64>,
 }
 
 impl Worker {
     fn new(shared: Arc<Shared>) -> Self {
-        Self { shared, library: None, captures: HashMap::new(), windows: HashMap::new(), closed: HashMap::new(), lease: None, library_path: None, validated_sessions: HashSet::new() }
+        Self { shared, backend: Backend::default(), captures: HashMap::new(), windows: HashMap::new(), closed: HashMap::new(), lease: None }
     }
 
     fn run(mut self, receiver: Receiver<Command>) {
@@ -291,7 +291,7 @@ impl Worker {
             if let Ok(command) = receiver.recv_timeout(Duration::from_millis(if pending.is_empty() { 15 } else { 5 })) { pending.push_back(command); }
             for command in receiver.try_iter().take(64) { pending.push_back(command); }
             let _ = shared.run_native(Instant::now() + Duration::from_secs(10), || {
-                windows::pump();
+                self.backend.poll();
                 self.cleanup();
             });
             self.process_pending(&mut pending);
@@ -334,8 +334,8 @@ impl Worker {
         self.discard_abandoned_capture();
         self.captures.retain(|_, capture| live.contains(&capture.session));
         self.closed.retain(|_, session| live.contains(session));
-        self.validated_sessions.retain(|session| live.contains(session));
-        let removed: Vec<u64> = self.windows.iter().filter(|(_, item)| !live.contains(&item.session) || !windows::valid(&item.window)).map(|(id, _)| *id).collect();
+        self.backend.retain_sessions(&live);
+        let removed: Vec<u64> = self.windows.iter().filter(|(_, item)| !live.contains(&item.session) || !item.target.is_present()).map(|(id, _)| *id).collect();
         for id in removed {
             if let Some(item) = self.windows.remove(&id) {
                 if live.contains(&item.session) { self.closed.insert(id, item.session); }
@@ -362,44 +362,22 @@ impl Worker {
         }
     }
 
-    fn library(&mut self, request: &RequestState) -> Result<Rc<Library>> {
-        if !self.validated_sessions.contains(&request.session.id) {
-            request.check()?;
-            let path = dll_path(&request.session.java_home)?;
-            request.check()?;
-            if let Some(selected) = self.library_path.as_ref() {
-                if selected != &path { return Err(Failure::new("CONFIGURATION", "This process already loaded a different Java bridge. Start another Python process to change it.")); }
-            } else {
-                self.library = Some(Library::load(&path)?);
-                self.library_path = Some(path);
-                windows::pump();
-            }
-            self.validated_sessions.insert(request.session.id);
-        }
-        Ok(self.library.as_ref().unwrap().clone())
-    }
-
-    fn matches(title: &str, pid: Option<u32>) -> Result<Vec<windows::Window>> {
-        if title.is_empty() || title.contains('\0') { return Err(Failure::new("CONFIGURATION", "An exact, nonempty window title is required.")); }
-        Ok(windows::list()?.into_iter().filter(|window| window.title == title && pid.is_none_or(|pid| window.pid == pid)).collect())
-    }
-
-    fn discover(&mut self, request: &RequestState, title: &str, pid: Option<u32>, before: Option<&HashSet<(isize, u32)>>) -> Result<Option<u64>> {
+    fn discover(&mut self, request: &RequestState, title: &str, pid: Option<u32>, before: Option<&HashSet<WindowKey>>) -> Result<Option<u64>> {
         let session = request.session.id;
-        let library = self.library(request)?;
+        self.backend.prepare_session(session, &request.session.options, &|| request.check())?;
         let mut found = None;
-        for window in Self::matches(title, pid)? {
+        for window in self.backend.candidates(title, pid)? {
             request.check()?;
-            if before.is_some_and(|before| before.contains(&(window.hwnd, window.pid))) { continue; }
-            if let Some(root) = Object::root(&library, &window) {
-                if found.is_some() { return Err(Failure::new("AMBIGUOUS", format!("More than one accessible Java window matches {title:?}. Add a PID filter."))); }
-                found = Some((window, root));
+            if before.is_some_and(|before| before.contains(&window.key())) { continue; }
+            if let Some(target) = self.backend.attach(window)? {
+                if found.is_some() { return Err(Failure::new("AMBIGUOUS", format!("More than one accessible window matches {title:?}. Add a PID filter."))); }
+                found = Some(target);
             }
         }
-        if let Some((window, root)) = found {
+        if let Some(target) = found {
             request.check()?;
             let id = self.shared.next.fetch_add(1, Ordering::Relaxed);
-            self.windows.insert(id, BoundWindow { session, window, root });
+            self.windows.insert(id, BoundWindow { session, target });
             if let Some(lease) = self.lease.as_mut() { lease.window = id; }
             else { self.lease = Some(Lease { session, capture: 0, window: id }); }
             Ok(Some(id))
@@ -423,13 +401,13 @@ impl Worker {
         if self.lease.is_some() {
             return Err(Failure::new("BUSY", "Another desktop flow is active. Close its window or desktop session first."));
         }
-        self.library(request)?;
-        let before = Self::matches(&args.title, args.pid)?
+        let session = request.session.id;
+        self.backend.prepare_session(session, &request.session.options, &|| request.check())?;
+        let before = self.backend.candidates(&args.title, args.pid)?
             .into_iter()
-            .map(|item| (item.hwnd, item.pid))
+            .map(|window| window.key())
             .collect();
         request.check()?;
-        let session = request.session.id;
         let id = self.shared.next.fetch_add(1, Ordering::Relaxed);
         self.captures.insert(id, Capture {
             session,
@@ -468,8 +446,8 @@ impl Worker {
         }
         let item = self.windows.get(&lease.window)
             .ok_or_else(|| Failure::new("STALE", "The desktop session's window is no longer available."))?;
-        if item.window.title != args.title || args.pid.is_some_and(|pid| pid != item.window.pid) {
-            return Err(Failure::new("BUSY", "This session is already bound to a different Java window."));
+        if !item.target.matches(&args.title, args.pid) {
+            return Err(Failure::new("BUSY", "This session is already bound to a different desktop window."));
         }
         Ok(Some(lease.window))
     }
@@ -487,39 +465,27 @@ impl Worker {
         }
         let item = self.windows.get(&id).filter(|window| window.session == session)
             .ok_or_else(|| Failure::new("STALE", "This native window is closed or belongs to another session."))?;
-        if !windows::valid(&item.window) {
-            self.invalidate_window(id);
-            if waiting_for_close { return Ok(Some(Reply { handle: id, text: None })); }
-            return Err(Failure::new("STALE", "The native window no longer exists."));
-        }
-        let library = self.library.as_ref().unwrap();
-        let current = Object::root(library, &item.window);
-        if let Some(current) = current {
-            if !item.root.same(&current) {
+        match item.target.state() {
+            WindowState::Closed => {
                 self.invalidate_window(id);
-                return Err(Failure::new("STALE", "Windows reused the handle for a different Java window."));
+                if waiting_for_close { return Ok(Some(Reply { handle: id, text: None })); }
+                return Err(Failure::new("STALE", "The native window no longer exists."));
             }
-        } else if !waiting_for_close {
-            self.invalidate_window(id);
-            return Err(Failure::new("STALE", "The Java window is no longer accessible."));
+            WindowState::Inaccessible(_) if waiting_for_close => return Ok(None),
+            WindowState::Inaccessible(error) | WindowState::Replaced(error) => {
+                self.invalidate_window(id);
+                return Err(error);
+            }
+            WindowState::Ready => {}
         }
-        if waiting_for_close { return Ok(None); }
-        if !matches!(args.role.as_str(), "textbox" | "button") || args.name.is_empty() {
-            return Err(Failure::new("CONFIGURATION", "A supported role and exact accessible name are required."));
-        }
-        let check = || request.check();
-        let control = match item.root.find(&args.role, &args.name, &check)? { Some(control) => control, None => return Ok(None) };
-        check()?;
-        if !control.ready(operation == WindowOperation::Fill)? { return Ok(None); }
-        check()?;
-        let mut reply = Reply { handle: id, text: None };
-        match (operation, args.role.as_str()) {
-            (WindowOperation::ReadText, "textbox") => reply.text = Some(control.text()?),
-            (WindowOperation::Fill, "textbox") => control.fill(&args.text, &check)?,
-            (WindowOperation::Click, "button") => control.click(&check)?,
-            _ => return Err(Failure::new("CONFIGURATION", "The action does not support this role.")),
-        }
-        Ok(Some(reply))
+        let action = match operation {
+            WindowOperation::ReadText => ControlAction::ReadText,
+            WindowOperation::Fill => ControlAction::Fill(&args.text),
+            WindowOperation::Click => ControlAction::Click,
+            WindowOperation::WaitClosed => return Ok(None),
+        };
+        Ok(item.target.perform(action, &args.role, &args.name, &|| request.check())?
+            .map(|result| Reply { handle: id, text: result.text }))
     }
 
     fn invalidate_window(&mut self, id: u64) {

@@ -2,9 +2,10 @@
 
 from dataclasses import dataclass
 
+from ._backend import validate_text_capacity
+
 MAX_TIMEOUT_MS = 2**32 - 1
 MAX_PROCESS_ID = 2**32 - 1
-MAX_TEXT_UNITS = 1023
 
 
 def validate_string(value: str, label: str) -> str:
@@ -30,7 +31,7 @@ class WindowQuery:
         if self.pid is not None and (
             isinstance(self.pid, bool) or not isinstance(self.pid, int) or not 0 < self.pid <= MAX_PROCESS_ID
         ):
-            raise ValueError("pid must be a positive Windows process identifier.")
+            raise ValueError("pid must be a positive process identifier.")
 
 
 def validate_control(role: str, name: str) -> None:
@@ -47,8 +48,7 @@ def validate_action_role(role: str, required_role: str, action: str) -> None:
 def validate_text(text: str) -> None:
     if not isinstance(text, str) or "\0" in text:
         raise ValueError("text must be a string without NUL characters.")
-    if len(_utf16(text, "text")) // 2 > MAX_TEXT_UNITS:
-        raise ValueError(f"Java Access Bridge accepts at most {MAX_TEXT_UNITS} UTF-16 code units.")
+    validate_text_capacity(len(_utf16(text, "text")) // 2)
 
 
 def _utf16(value: str, label: str) -> bytes:

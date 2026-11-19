@@ -1,5 +1,5 @@
 use super::*;
-use crate::jab::{ffi::{JavaObject, VmId}, loader::tests::test_library};
+use crate::{jab::{ffi::{JavaObject, VmId}, loader::tests::test_library}, windows};
 use ::windows::{
     Win32::{
         Foundation::HWND,
@@ -7,10 +7,14 @@ use ::windows::{
     },
     core::w,
 };
-use std::cell::{Cell, RefCell};
+use std::{cell::{Cell, RefCell}, rc::Rc};
 
 fn session(id: u64) -> Arc<SessionState> {
-    Arc::new(SessionState { id, closed: AtomicBool::new(false), java_home: String::new() })
+    Arc::new(SessionState {
+        id,
+        closed: AtomicBool::new(false),
+        options: SessionOptions::java("C:/test-java").unwrap(),
+    })
 }
 
 fn request(session: Arc<SessionState>, deadline: Instant) -> Arc<RequestState> {
@@ -61,7 +65,7 @@ impl Drop for HiddenWindow {
 
 #[test]
 fn request_cancellation_and_closure_are_checked() {
-    let session = Arc::new(SessionState { id: 1, closed: AtomicBool::new(false), java_home: String::new() });
+    let session = session(1);
     let request = request(session.clone(), Instant::now() + Duration::from_secs(1));
     assert!(request.check().is_ok());
     request.cancelled.store(true, Ordering::Release);
@@ -141,10 +145,9 @@ fn pending_commands_with_expired_cancelled_or_closed_requests_are_discarded() {
 #[test]
 fn cancelling_a_queued_preparation_after_reservation_releases_it_before_the_next_command() {
     let mut worker = test_worker();
-    worker.library = Some(test_library());
     let owner = session(1);
     let other = session(2);
-    worker.validated_sessions.extend([owner.id, other.id]);
+    worker.backend = Backend::with_test_library(test_library(), [owner.id, other.id]);
     let deadline = Instant::now() + Duration::from_secs(10);
     let abandoned = request(owner, deadline);
     let next = request(other, deadline);
@@ -208,11 +211,11 @@ fn assert_stale_root(next_root: JavaObject, expected_error: &str, expected_relea
         let bindings = Rc::get_mut(&mut library).unwrap();
         bindings.context = current_root;
         bindings.release = release;
-        let root = Object::root(&library, &window).expect("original Java root");
         let mut worker = test_worker();
-        worker.library = Some(library);
+        worker.backend = Backend::with_test_library(library, []);
+        let target = worker.backend.attach_test_window(window).unwrap().expect("original Java root");
         let owner = session(1);
-        worker.windows.insert(2, BoundWindow { session: owner.id, window, root });
+        worker.windows.insert(2, BoundWindow { session: owner.id, target });
         worker.lease = Some(Lease { session: owner.id, capture: 0, window: 2 });
         let request = request(owner, Instant::now() + Duration::from_secs(10));
         let (action, result) = command(request, Operation::Window(WindowOperation::Click), Arguments {
@@ -278,10 +281,10 @@ fn a_blocked_jab_call_keeps_the_engine_unavailable_after_it_resumes() {
     let worker = std::thread::spawn(move || {
         let mut library = test_library();
         Rc::get_mut(&mut library).unwrap().context = blocking_context;
-        let root = Object::root(&library, &window).expect("initial Java root");
         let mut worker = Worker::new(worker_state);
-        worker.library = Some(library);
-        worker.windows.insert(2, BoundWindow { session: worker_session.id, window, root });
+        worker.backend = Backend::with_test_library(library, []);
+        let target = worker.backend.attach_test_window(window).unwrap().expect("initial Java root");
+        worker.windows.insert(2, BoundWindow { session: worker_session.id, target });
         worker.lease = Some(Lease { session: worker_session.id, capture: 0, window: 2 });
         GATE.set(Some(Gate { entered, resume }));
         ready.send(()).unwrap();
