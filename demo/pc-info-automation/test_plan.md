@@ -31,8 +31,6 @@ Datos de prueba: fecha `2026-11-19`, equipo `EQUIPO-CLICKONCE` y alias `Integrac
 
 **Criterio de salida.** PC-01 se aprueba cuando se cumplen todos los resultados esperados. Si el escenario inicia y falla, registra el paso, los datos, el resultado esperado y el observado, la salida de consola y la versión de la demo y del navegador. Distingue, por ejemplo, un fallo de apertura de ClickOnce de una diferencia en el contenido del PDF.
 
-**Última verificación local (19 de noviembre de 2026).** PC-01 agotó la espera de la ventana Java tras solicitar la apertura desde Edge. Al abrir el formulario Java directamente en una comprobación aparte, pasaron la captura, la edición, el cierre y las comprobaciones de la web y del PDF.
-
 ## Estructura POM
 
 | Ruta | Responsabilidad |

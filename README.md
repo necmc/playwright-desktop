@@ -29,7 +29,7 @@ Con la API asíncrona de Playwright, utiliza `await` en acciones como `fill()` y
 ```text
 lib/     Librería Python y motor Rust
 demo/    Ejemplos de integración y sus pruebas
-docs/    Arquitectura y plan de implementación
+docs/    Documentación técnica y arquitectura
 ```
 
 ## Más información

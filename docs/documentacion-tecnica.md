@@ -85,20 +85,6 @@ La instalación de Mage utiliza `dotnet tool install --allow-roll-forward`, disp
 
 El lanzador obtiene la ruta Java de su archivo de configuración, distribuido con la publicación. El JAR utiliza Swing y las API estándar de Java 11. Los endpoints aceptados por los componentes nativos se limitan al servidor HTTP local de la demo.
 
-## Estado de verificación
-
-| Comprobación | Estado |
-| --- | --- |
-| Contrato HTTP, aislamiento, concurrencia, validación, expiración y reintentos | Ocho pruebas de backend pasan. Incluyen generación de PDF y extracción de sus valores. |
-| Orquestador y servidor HTTP | Arranque verificado, puerto configurable, publicación y URL de activación coherentes; parada con `Ctrl+C` comprobada. |
-| Compilación Java y C# y generación de manifiestos | Verificadas; Java se compila con destino 11. |
-| Corrección de `RefDefValidation` | Publicación recompilada y ausencia de la identidad Win32 conflictiva comprobada en el ejecutable. |
-| Activación ClickOnce | El controlador del sistema descargó la publicación e inició el lanzador y Java. La captura posterior de la ventana agotó el plazo; la activación normal desde Edge sigue pendiente. |
-| Java directo con OpenJDK y retorno HTTP | Seis casos técnicos pasaron previamente; retirados de la demo para mantener solo el escenario funcional. Vista previa visual pendiente. |
-| Librería Python/Rust | Wheel construido e instalado; 19 pruebas Python, 4 Rust y contraste del ABI aprobados. Matriz de versiones y regresiones adicionales pendientes. |
-
-Las pruebas del backend verifican el contenido textual del PDF. La revisión visual y el recorrido completo siguen pendientes. El [estado del corte](pendientes.md) registra los resultados parciales, los límites y las siguientes tareas.
-
 ## Herramientas de desarrollo
 
 ### Desarrollo de la librería
@@ -121,7 +107,7 @@ Las pruebas internas Python se ejecutan con:
 py -m unittest discover -s lib/tests -v
 ```
 
-El estado de validación y el trabajo restante se mantienen en [pendientes.md](pendientes.md). La versión [0.1.0 está publicada en PyPI](https://pypi.org/project/playwright-desktop/0.1.0/).
+La versión [0.1.0 está publicada en PyPI](https://pypi.org/project/playwright-desktop/0.1.0/).
 
 ### Publicación en PyPI
 
@@ -158,12 +144,3 @@ Las skills de `.agents/skills/` apoyan el trabajo del agente y no son dependenci
 - Definir esperas por condiciones observables, tiempos límite y resultados claros.
 - Asociar cada ventana y resultado con la operación que los inició.
 - Separar las pruebas del contrato HTTP, la ejecución directa del lanzador y la activación real desde el navegador.
-
-## Diseño de la librería
-
-La [arquitectura Python y Rust](superpowers/specs/2026-11-17-libreria-python-rust-design.md) define el monkey patch, el paquete mixto y el motor Windows con Java Access Bridge para Swing. La base está implementada. El [plan de referencia](superpowers/plans/2026-11-17-libreria-python-rust.md) conserva el alcance previsto; el [seguimiento actualizado](pendientes.md) divide lo restante en tareas pequeñas.
-
-## Diseño y plan
-
-- [Diseño aprobado](superpowers/specs/2026-11-17-demo-clickonce-java-design.md).
-- [Plan de implementación](superpowers/plans/2026-11-17-demo-clickonce-java.md).

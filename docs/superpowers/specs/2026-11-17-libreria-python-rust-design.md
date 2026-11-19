@@ -1,6 +1,6 @@
 # playwright-desktop — arquitectura Python y Rust
 
-Estado: arquitectura de referencia de la base Python/Rust implementada. El recorrido completo sigue en validación; consultar el [estado del corte](../../pendientes.md). El punto de entrada público es `page.desktop`.
+El punto de entrada público es `page.desktop`. Las tareas y sus resultados se registran en el [plan de implementación](../plans/2026-11-17-libreria-python-rust.md).
 
 ## Objetivo y límites
 
@@ -141,7 +141,7 @@ lto = "thin"
 codegen-units = 1
 ```
 
-Son versiones base del diseño, pendientes de validar juntas al compilar. Playwright 1.63.0 está instalado en el entorno del proyecto; se propone comprobar también 1.65.2 antes de declarar compatible ese intervalo. Una versión fuera del intervalo debe producir un diagnóstico claro y no un parche parcial.
+Son las versiones base del diseño. La evidencia de compatibilidad se registra en el [plan de implementación](../plans/2026-11-17-libreria-python-rust.md#tarea-7--distribución-documentación-y-medidas). Una versión fuera del intervalo debe producir un diagnóstico claro y no un parche parcial.
 
 Se usa Maturin para el wheel mixto y PyO3 con ABI estable para CPython convencional 3.10 a 3.14 en Windows x64. Los builds free-threaded, PyPy y otras plataformas quedan fuera de la matriz inicial. Los usuarios de un wheel precompilado no necesitan Rust; compilar desde fuentes requiere Rust MSVC y las herramientas C++ de Windows. Se conserva el uso de Python global mediante `pip install --user`, sin exigir un entorno virtual.
 
@@ -270,7 +270,3 @@ Los errores públicos distinguen colisión del parche, plataforma no soportada, 
 - Se mide inicialización en frío, búsqueda, lectura, edición y acción en caliente, con percentiles p50/p95 y control de recursos tras recorridos repetidos. Se separa el tiempo del motor del arranque ClickOnce y de la generación del PDF.
 
 Rust reduce el trabajo del adaptador y permite agrupar consultas, pero la comunicación JAB y la respuesta de Swing siguen siendo costes reales. No se declararán cifras de velocidad ni una garantía de ser más rápido sin mediciones.
-
-## Decisiones de esta propuesta
-
-La base implementada utiliza `page.desktop`, Python, Rust, PyO3, `windows-rs`, monkey patching al importar y un backend JAB. El [plan de implementación](../plans/2026-11-17-libreria-python-rust.md) conserva el alcance previsto; el [estado y los pendientes](../../pendientes.md) distinguen las verificaciones realizadas del trabajo restante.

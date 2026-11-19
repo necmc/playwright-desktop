@@ -1,8 +1,8 @@
 # Demo propia de intercambio de información
 
-## Estado y objetivo
+## Objetivo
 
-Diseño aprobado de la demo propia de playwright-desktop, proyecto de librería para integrar Playwright con aplicaciones de escritorio invocadas desde la web. Este documento recoge las decisiones de diseño vigentes; la [documentación técnica](../../documentacion-tecnica.md#estado-de-verificación) registra su estado de verificación.
+`pc-info` demuestra cómo integrar Playwright con una aplicación de escritorio invocada desde la web. Las tareas y sus resultados se registran en el [plan de implementación](../plans/2026-11-17-demo-clickonce-java.md).
 
 La demo permitirá recorrer una operación completa entre una web Python, un lanzador ClickOnce en C# y una aplicación Java de escritorio. La web generará un PDF con los datos confirmados en Java y lo mostrará en el visor del navegador.
 
@@ -84,7 +84,7 @@ La configuración inicial es local, con Flask en `127.0.0.1:18765` y puerto conf
 
 ## Alcance de la implementación
 
-Todos los componentes de esta demo se implementan en `demo/pc-info/`, con sus pruebas y configuración. Se dividen en `web/`, `desktop-java/` y `launcher-clickonce/`. Las clases y el JAR se generan en `desktop-java/build/`. La publicación y Mage pertenecen a `launcher-clickonce/publish/` y `launcher-clickonce/.tools/`. La API de la librería se desarrollará después de verificar este recorrido completo.
+Todos los componentes de esta demo se implementan en `demo/pc-info/`, con sus pruebas y configuración. Se dividen en `web/`, `desktop-java/` y `launcher-clickonce/`. Las clases y el JAR se generan en `desktop-java/build/`. La publicación y Mage pertenecen a `launcher-clickonce/publish/` y `launcher-clickonce/.tools/`. El recorrido automatizado con la librería se ejecuta desde `demo/pc-info-automation/`.
 
 `demo/README.md` centraliza el objetivo, contenido, ejecución y pruebas de las demos. El README principal presenta la librería y su API. Los detalles de arquitectura y del intercambio entre componentes pertenecen a la documentación técnica.
 
