@@ -8,7 +8,7 @@
 
 **Especificación.** [Arquitectura y contrato](../specs/2026-11-17-libreria-python-rust-design.md).
 
-**Estado.** La base Python/Rust está implementada y la versión `0.1.0` está publicada. Las tareas 1 a 4 están cerradas. El siguiente corte corresponde al ciclo de vida y la recuperación del motor en la tarea 5.
+**Estado.** La base Python/Rust está implementada y la versión `0.1.0` está publicada. Las tareas 1 a 5 están cerradas. El siguiente corte corresponde al recorrido completo de la demo en la tarea 6.
 
 Marca cada paso al cumplir su criterio de cierre y registra allí la evidencia. Si una comprobación se registra en otro plan, enlaza su tarea.
 
@@ -88,7 +88,7 @@ El runner comprueba que la demo ya esté en ejecución y utiliza un perfil tempo
 
 ## Tarea 5 — worker, integración sync/async y recuperación
 
-**Archivos:** completar `engine.rs`, `lib.rs`, `_sync.py`, `_async.py`, `_native.pyi`, `_errors.py` y `tests/test_async.py`.
+**Archivos.** Motor en `lib/rust/src/engine.rs`, pruebas del motor en `lib/rust/src/engine/tests.rs` y pruebas Python en `lib/tests/`.
 
 **Produce:** un motor compartido por proceso con ruta de bridge inmutable después del arranque, mensajes Windows, plazos monótonos y errores traducidos a Python. La fachada pública implementa el mismo contrato en sync y async.
 
@@ -98,10 +98,12 @@ El runner comprueba que la demo ya esté en ejecución y utiliza un perfil tempo
 - [x] Cubrir las regresiones de ciclo de vida en `lib/tests/` y Rust. Una petición corta en cola puede vencer sin invalidar una petición activa con plazo vigente. El bucle async responde durante un inicio nativo lento. Una preparación cancelada libera la reserva antes de la siguiente solicitud, incluso si ya la había tomado. Una raíz Java obsoleta libera su ventana.
 - [x] Verificar que el worker consulta y libera las referencias JAB en su hilo, que se rechaza un segundo runtime y que el acceso a una página real de Playwright y su evento de cierre ocurren en el bucle original. La prueba de la página usó un motor de escritorio simulado.
 - [x] Verificar timeout cero, cierre de página, cierre externo de ventana, recolección y cierre explícito con solicitudes pendientes. Las pruebas del worker confirman que los comandos cancelados, vencidos o de sesiones cerradas se descartan antes de actuar.
-- [ ] Simular una llamada JAB bloqueada en un doble controlable, marcar el motor no utilizable al superar su plazo y rechazar solicitudes posteriores hasta reiniciar Python. Liberar el doble al terminar para que la prueba no deje un hilo bloqueado.
-- [ ] Tras las regresiones, reconstruir el wheel y repetir las pruebas Python contra la instalación resultante y las pruebas Rust del crate.
+- [x] Simular una llamada JAB bloqueada con un doble controlable. Al vencer el plazo, el motor informa un timeout e indica reiniciar Python. Rechaza las solicitudes en cola y las nuevas aunque el doble se libere. La prueba libera el doble y espera el fin del hilo.
+- [x] Reconstruir el wheel Windows x64 desde un directorio de compilación nuevo, instalarlo en una carpeta temporal y repetir las pruebas Python y Rust.
 
 **Verificación del primer corte.** Pasaron 15 pruebas Rust y 37 Python contra un wheel Windows x64 del corte, incluidas las pruebas Swing con JDK 11.0.21. También se verificó el evento de cierre de una página de Playwright en Edge sin interfaz.
+
+**Verificación del cierre.** Pasaron 16 pruebas Rust y 37 Python. Se comprobó la importación de la extensión nativa desde la instalación temporal del wheel y se ejecutaron las pruebas Swing con JDK 11.0.21.
 
 ## Tarea 6 — recorrido real de la demo
 
