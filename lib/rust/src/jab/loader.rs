@@ -6,6 +6,23 @@ use ::windows::core::{PCSTR, PCWSTR};
 use std::{fs, path::{Path, PathBuf}, rc::Rc};
 
 struct Module(HMODULE);
+impl Module {
+    fn load(path: &Path) -> Result<Self> {
+        use std::os::windows::ffi::OsStrExt;
+        let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+        // SAFETY: absolute DLL path, terminated and alive for this call.
+        unsafe {
+            LoadLibraryExW(
+                PCWSTR(wide.as_ptr()),
+                None,
+                LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS,
+            )
+        }
+        .map(Self)
+        .map_err(|error| Failure::new("BRIDGE", format!("Cannot load Java Access Bridge: {error}")))
+    }
+}
+
 impl Drop for Module {
     fn drop(&mut self) {
         // SAFETY: this guard owns one successful LoadLibraryExW reference.
@@ -50,11 +67,7 @@ unsafe fn symbol<T: Copy>(module: HMODULE, name: &'static [u8]) -> Result<T> {
 
 impl Library {
     pub fn load(path: &Path) -> Result<Rc<Self>> {
-        use std::os::windows::ffi::OsStrExt;
-        let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
-        // SAFETY: absolute, validated DLL path, terminated and alive for this call.
-        let module = Module(unsafe { LoadLibraryExW(PCWSTR(wide.as_ptr()), None, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS) }
-            .map_err(|e| Failure::new("BRIDGE", format!("Cannot load Java Access Bridge: {e}")))?);
+        let module = Module::load(path)?;
         // SAFETY: these names and signatures follow AccessBridgeCalls.h/c for x64.
         unsafe {
             let run: Run = symbol(module.0, b"Windows_run\0")?;
@@ -77,3 +90,7 @@ impl Library {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "tests.rs"]
+mod tests;

@@ -1,3 +1,4 @@
+import os
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -34,6 +35,16 @@ class ApiTests(unittest.TestCase):
 
     def test_native_timeout_can_be_caught_as_playwright_timeout(self):
         self.assertIsInstance(DesktopTimeoutError("timeout"), PlaywrightTimeoutError)
+
+    def test_missing_java_home_is_reported_before_loading_the_engine(self):
+        page = FakePage()
+        desktop = Desktop(Session(page))
+        with patch.dict(os.environ), patch("playwright_desktop._runtime._get_engine") as get_engine:
+            os.environ.pop("JAVA_HOME", None)
+            with self.assertRaisesRegex(DesktopConfigurationError, "JAVA_HOME"):
+                with desktop.expect_window(title="Información del equipo"):
+                    self.fail("Capture should require a runtime directory.")
+        get_engine.assert_not_called()
 
     def test_text_limit_counts_utf16_units_and_rejects_surrogates(self):
         validate_text("\U00010400" * 511 + "A")

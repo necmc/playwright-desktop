@@ -19,7 +19,12 @@ pub struct Object(Rc<ObjectInner>);
 
 pub fn decode(value: &[u16]) -> Result<String> {
     let end = value.iter().position(|v| *v == 0).ok_or_else(|| Failure::new("ACTION", "Unterminated UTF-16 returned by Java Access Bridge."))?;
-    String::from_utf16(&value[..end]).map_err(|_| Failure::new("ACTION", "Invalid UTF-16 returned by Java Access Bridge."))
+    decode_utf16(&value[..end])
+}
+
+fn decode_utf16(value: &[u16]) -> Result<String> {
+    String::from_utf16(value)
+        .map_err(|_| Failure::new("ACTION", "Invalid UTF-16 returned by Java Access Bridge."))
 }
 
 impl Object {
@@ -96,12 +101,20 @@ impl Object {
             return Err(Failure::new("ACTION", "Text exceeds the supported 1023 UTF-16 code units."));
         }
         if info.count == 0 { return Ok(String::new()); }
-        let mut buffer = [0u16; MAX_TEXT];
-        // SAFETY: indices match the returned text length and buffer capacity is explicit.
-        if unsafe { (self.0.library.text_range)(self.0.vm, self.0.object, 0, info.count - 1, buffer.as_mut_ptr(), MAX_TEXT as i16) } == 0 {
+        let count = info.count as usize;
+        let mut buffer = [u16::MAX; MAX_TEXT];
+        let capacity = (count + 1) as i16;
+        // SAFETY: the requested range fits in the buffer with room for its terminator.
+        if unsafe {
+            (self.0.library.text_range)(self.0.vm, self.0.object, 0, info.count - 1, buffer.as_mut_ptr(), capacity)
+        } == 0 {
             return Err(Failure::new("ACTION", "Java Access Bridge could not read the text range."));
         }
-        decode(&buffer)
+        let text = &buffer[..count];
+        if buffer[count] != 0 || text.contains(&0) {
+            return Err(Failure::new("ACTION", "Java Access Bridge returned an incomplete or unterminated text range."));
+        }
+        decode_utf16(text)
     }
 
     pub fn fill(&self, text: &str, check: &dyn Fn() -> Result<()>) -> Result<()> {

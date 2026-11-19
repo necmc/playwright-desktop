@@ -25,7 +25,13 @@ class NativeTests(unittest.TestCase):
     def tearDownClass(cls):
         cls.directory.cleanup()
 
-    def test_missing_bridge_and_incorrect_architecture_have_typed_diagnostics(self):
+    def test_native_session_requires_a_runtime_directory(self):
+        with self.assertRaises(self.native.NativeError) as error:
+            self.engine.open_session("")
+        self.assertEqual(error.exception.args[0], "CONFIGURATION")
+        self.assertIn("java_home", error.exception.args[1])
+
+    def test_missing_bridge_reports_the_expected_dll_path(self):
         with self.assertRaises(self.native.NativeError) as error:
             session = self.engine.open_session(str(self.home / "missing"))
             try:
@@ -33,9 +39,14 @@ class NativeTests(unittest.TestCase):
             finally:
                 self.engine.close_session(session)
         self.assertEqual(error.exception.args[0], "BRIDGE")
+        self.assertIn("windowsaccessbridge-64.dll", error.exception.args[1])
+
+    def test_incorrect_architecture_has_a_typed_diagnostic(self):
         other = self.home / "x86/bin"
         other.mkdir(parents=True, exist_ok=True)
-        (other / "windowsaccessbridge-64.dll").write_bytes(b"not a PE file")
+        image = bytearray((self.home / "bin/windowsaccessbridge-64.dll").read_bytes())
+        image[132:134] = b"\x4c\x01"  # IMAGE_FILE_MACHINE_I386
+        (other / "windowsaccessbridge-64.dll").write_bytes(image)
         with self.assertRaises(self.native.NativeError) as error:
             session = self.engine.open_session(str(other.parent))
             try:

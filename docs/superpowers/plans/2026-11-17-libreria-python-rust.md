@@ -8,7 +8,7 @@
 
 **Especificación.** [Arquitectura y contrato](../specs/2026-11-17-libreria-python-rust-design.md).
 
-**Estado.** La base Python/Rust está implementada y la versión `0.1.0` está publicada. El próximo cambio acotado es cubrir las regresiones del ciclo de vida en la tarea 5. La validación en navegador continúa en la tarea 6.
+**Estado.** La base Python/Rust está implementada y la versión `0.1.0` está publicada. Las tareas 1 a 3 están cerradas. El siguiente corte corresponde a la selección de ventanas y controles en la tarea 4.
 
 Marca cada paso al cumplir su criterio de cierre y registra allí la evidencia. Si una comprobación se registra en otro plan, enlaza su tarea.
 
@@ -59,14 +59,18 @@ El runner comprueba que la demo ya esté en ejecución y utiliza un perfil tempo
 
 ## Tarea 3 — acceso a Windows y cliente JAB
 
-**Archivos:** crear `rust/src/windows.rs`, `rust/src/jab/{mod.rs,ffi.rs,loader.rs}`, `rust/src/error.rs` y `rust/tests/abi_layout.c`. Ampliar el binding y los stubs.
+**Archivos.** `lib/rust/src/windows.rs`, `lib/rust/src/jab/{mod.rs,ffi.rs,loader.rs,tests.rs}`, `lib/rust/src/error.rs`, `lib/rust/tests/abi_layout.c`, `lib/tests/test_api.py` y `lib/tests/test_native.py`.
 
 **Consume:** ruta absoluta del runtime y filtros de ventana. **Produce:** carga del bridge, información básica de ventanas, lectura del contexto raíz y objetos Java con propiedad y liberación explícitas. Los handles se mantienen dentro de Rust.
 
 - [x] Implementar las llamadas de `windows-rs`, la carga JAB desde el runtime seleccionado, la decodificación UTF-16 y la liberación con RAII. Los diagnósticos de bridge ausente y arquitectura incorrecta tienen cobertura automatizada.
 - [x] Contrastar tamaños, alineaciones y offsets del ABI con una sonda C compilada con los headers del JDK. La sonda queda fuera del wheel.
 - [x] Cargar el bridge e identificar la raíz de un formulario real en Windows. El orquestador de la demo permite habilitarlo mediante `-EnableAccessBridge`.
-- [ ] Completar las pruebas de ruta ausente, símbolo obligatorio faltante y bridge deshabilitado. Comprobar que los objetos se liberan ante fallos de decodificación y que el texto no se trunca en silencio.
+- [x] Comprobar los diagnósticos de ruta Java sin configurar, DLL ausente, arquitectura x86 y símbolo `Windows_run` faltante.
+- [x] Rechazar una lectura si el rango UTF-16 termina antes de la longitud anunciada o carece de terminador. Las pruebas verifican la liberación del candidato y de los hijos pendientes si falla la decodificación del árbol.
+- [x] Verificar Swing con JDK 11.0.21. La ventana visible agotó la espera con Java Access Bridge deshabilitado en un perfil temporal. Al habilitar el bridge en el proceso JVM, se leyó y editó el mismo control con 1.023 unidades UTF-16, incluido un carácter suplementario.
+
+**Verificación del corte.** Pasaron 8 pruebas Rust y 24 pruebas Python contra un wheel Windows x64 recién compilado.
 
 ## Tarea 4 — selección y operaciones básicas
 
