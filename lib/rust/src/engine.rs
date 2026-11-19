@@ -79,13 +79,7 @@ impl Engine {
             .map_err(|_| as_python(Failure::new("BRIDGE", "The engine initialization lock failed.")))?;
         if global.is_none() {
             let (sender, receiver) = mpsc::channel();
-            let shared = Arc::new(Shared {
-                sender, sessions: Mutex::new(HashMap::new()),
-                captures_cancelled: Mutex::new(HashSet::new()), next: AtomicU64::new(1),
-                queued: AtomicUsize::new(0), poisoned: AtomicBool::new(false), in_native: AtomicBool::new(false),
-                progress: AtomicU64::new(0),
-                active_request: AtomicU64::new(0), active_deadline: Mutex::new(None),
-            });
+            let shared = Arc::new(Shared::new(sender));
             let owner = shared.clone();
             std::thread::Builder::new().name("playwright-desktop-jab".into())
                 .spawn(move || {
@@ -194,6 +188,21 @@ impl Engine {
 }
 
 impl Shared {
+    fn new(sender: Sender<Command>) -> Self {
+        Self {
+            sender,
+            sessions: Mutex::new(HashMap::new()),
+            captures_cancelled: Mutex::new(HashSet::new()),
+            next: AtomicU64::new(1),
+            queued: AtomicUsize::new(0),
+            poisoned: AtomicBool::new(false),
+            in_native: AtomicBool::new(false),
+            progress: AtomicU64::new(0),
+            active_request: AtomicU64::new(0),
+            active_deadline: Mutex::new(None),
+        }
+    }
+
     fn native_overdue(&self) -> bool {
         self.in_native.load(Ordering::Acquire)
             && self.active_deadline.lock().unwrap().is_some_and(|deadline| Instant::now() >= deadline)
@@ -424,6 +433,16 @@ impl Worker {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::jab::{ffi::{JavaObject, VmId}, loader::tests::test_library};
+    use ::windows::{
+        Win32::{
+            Foundation::HWND,
+            UI::WindowsAndMessaging::{CreateWindowExW, DestroyWindow, WINDOW_EX_STYLE, WS_POPUP},
+        },
+        core::w,
+    };
+    use std::cell::Cell;
+
     #[test]
     fn request_cancellation_and_closure_are_checked() {
         let session = Arc::new(SessionState { id: 1, closed: AtomicBool::new(false), java_home: String::new() });
@@ -439,5 +458,72 @@ mod tests {
     fn deadlines_are_monotonic() {
         let request = RequestState { id: 1, session: Arc::new(SessionState { id: 2, closed: AtomicBool::new(false), java_home: String::new() }), deadline: Instant::now() - Duration::from_millis(1), immediate: false, cancelled: AtomicBool::new(false) };
         assert_eq!(request.check().unwrap_err().code, "TIMEOUT");
+    }
+
+    #[test]
+    fn a_reused_hwnd_cannot_route_an_action_to_a_different_java_root() {
+        struct HiddenWindow(HWND);
+        impl Drop for HiddenWindow {
+            fn drop(&mut self) {
+                // SAFETY: this test thread created and owns the window.
+                unsafe { let _ = DestroyWindow(self.0); }
+            }
+        }
+
+        thread_local! {
+            static ROOT: Cell<JavaObject> = const { Cell::new(1) };
+        }
+
+        unsafe extern "C" fn current_root(_: HWND, vm: *mut VmId, object: *mut JavaObject) -> i32 {
+            // SAFETY: Object::root passes writable out parameters.
+            unsafe {
+                *vm = 7;
+                *object = ROOT.get();
+            }
+            1
+        }
+
+        // SAFETY: STATIC is a system class and the window has no parent or callback data.
+        let handle = HiddenWindow(unsafe {
+            CreateWindowExW(WINDOW_EX_STYLE(0), w!("STATIC"), w!("JAB identity test"),
+                           WS_POPUP, 0, 0, 1, 1, None, None, None, None)
+        }.expect("create hidden window"));
+        let window = windows::Window {
+            hwnd: handle.0.0 as isize,
+            pid: std::process::id(),
+            title: "JAB identity test".into(),
+        };
+        assert!(windows::valid(&window));
+
+        let mut library = test_library();
+        Rc::get_mut(&mut library).unwrap().context = current_root;
+        let root = Object::root(&library, &window).expect("original Java root");
+        let (sender, _receiver) = mpsc::channel();
+        let mut worker = Worker::new(Arc::new(Shared::new(sender)));
+        worker.library = Some(library);
+        let session = Arc::new(SessionState { id: 1, closed: AtomicBool::new(false), java_home: String::new() });
+        worker.windows.insert(2, BoundWindow { session: session.id, window, root });
+        worker.lease = Some(Lease { session: session.id, capture: 0, window: 2 });
+        let request = Arc::new(RequestState {
+            id: 3,
+            session,
+            deadline: Instant::now() + Duration::from_secs(1),
+            immediate: false,
+            cancelled: AtomicBool::new(false),
+        });
+        let (reply, _result) = mpsc::channel();
+        let action = Command {
+            request,
+            operation: "click".into(),
+            arguments: Arguments { window_id: 2, role: "button".into(), name: "Confirmar".into(), ..Arguments::default() },
+            reply,
+        };
+
+        ROOT.set(4);
+        let error = worker.step(&action).err().expect("reject the changed Java root");
+        assert_eq!(error.code, "STALE");
+        assert!(error.message.contains("reused the handle"));
+        assert!(!worker.windows.contains_key(&2));
+        assert!(worker.lease.is_none());
     }
 }

@@ -55,6 +55,8 @@ impl Object {
     }
 
     pub fn find(&self, role: &str, name: &str, check: &dyn Fn() -> Result<()>) -> Result<Option<Self>> {
+        const MAX_NODES: usize = 4096;
+        const MAX_DEPTH: usize = 64;
         let expected = match role { "textbox" => "text", "button" => "push button", _ => return Err(Failure::new("ACTION", "Unsupported accessible role.")) };
         let mut stack = vec![(self.clone(), 0)];
         let mut found = None;
@@ -62,16 +64,17 @@ impl Object {
         while let Some((node, depth)) = stack.pop() {
             check()?;
             visited += 1;
-            if visited > 4096 || depth > 64 {
-                return Err(Failure::new("ACTION", "The Java accessibility tree exceeds the traversal limit."));
-            }
             let info = node.info()?;
             if decode(&info.role_en_us)? == expected && decode(&info.name)? == name {
                 if found.is_some() { return Err(Failure::new("AMBIGUOUS", format!("More than one {role} is named {name:?}."))); }
                 found = Some(node.clone());
             }
-            if !(0..=4096).contains(&info.children_count) {
+            if !(0..=MAX_NODES as i32).contains(&info.children_count) {
                 return Err(Failure::new("ACTION", "Invalid or excessive child count from Java Access Bridge."));
+            }
+            let children = info.children_count as usize;
+            if visited + stack.len() + children > MAX_NODES || (depth == MAX_DEPTH && children != 0) {
+                return Err(Failure::new("ACTION", "The Java accessibility tree exceeds the traversal limit."));
             }
             for index in (0..info.children_count).rev() {
                 check()?;

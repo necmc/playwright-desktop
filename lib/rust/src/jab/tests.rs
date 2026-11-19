@@ -73,7 +73,7 @@ unsafe extern "C" fn incomplete_text(
     1
 }
 
-fn test_library(is_java: IsJavaWindow) -> Rc<Library> {
+pub(crate) fn test_library() -> Rc<Library> {
     extern "C" fn same(_: VmId, first: JavaObject, second: JavaObject) -> i32 {
         i32::from(first == second)
     }
@@ -83,7 +83,7 @@ fn test_library(is_java: IsJavaWindow) -> Rc<Library> {
 
     Rc::new(Library {
         _module: Module::load(&system_dll()).expect("system DLL loads"),
-        is_java,
+        is_java: recognized,
         context: root_context,
         release,
         same,
@@ -103,14 +103,15 @@ fn test_window() -> windows::Window {
 
 #[test]
 fn ignores_a_window_the_bridge_does_not_recognize() {
-    let library = test_library(unrecognized);
+    let mut library = test_library();
+    Rc::get_mut(&mut library).unwrap().is_java = unrecognized;
     assert!(Object::root(&library, &test_window()).is_none());
     RELEASED.with_borrow(|objects| assert!(objects.is_empty()));
 }
 
 #[test]
 fn releases_the_candidate_and_pending_children_when_decoding_fails() {
-    let library = test_library(recognized);
+    let library = test_library();
     let root = Object::root(&library, &test_window()).expect("reachable root");
     let error = root.find("textbox", "A", &|| Ok(())).err().expect("invalid role encoding");
     assert_eq!(error.code, "ACTION");
@@ -126,11 +127,70 @@ fn releases_the_candidate_and_pending_children_when_decoding_fails() {
 
 #[test]
 fn rejects_a_text_range_that_ends_before_the_reported_length() {
-    let library = test_library(recognized);
+    let library = test_library();
     let root = Object::root(&library, &test_window()).expect("reachable root");
     let error = root.text().expect_err("the bridge returned an incomplete range");
     assert_eq!(error.code, "ACTION");
     assert!(error.message.contains("text range"));
     drop(root);
     RELEASED.with_borrow_mut(|objects| assert_eq!(std::mem::take(objects), [(7, 1)]));
+}
+
+unsafe extern "C" fn limited_tree_info(vm: VmId, object: JavaObject, info: *mut ContextInfo) -> i32 {
+    // SAFETY: node_info and this test callback receive the same live out parameter.
+    unsafe { node_info(vm, 2, info); }
+    if object != 1 {
+        // SAFETY: Object::info provides a writable ContextInfo.
+        unsafe { (*info).name[0] = 0; }
+    }
+    1
+}
+
+unsafe extern "C" fn wide_tree_info(vm: VmId, object: JavaObject, info: *mut ContextInfo) -> i32 {
+    // SAFETY: the shared fixture writes to the supplied ContextInfo.
+    unsafe { limited_tree_info(vm, object, info); }
+    if object == 1 {
+        // The root already matches, but this many children exceed the total node budget.
+        unsafe { (*info).children_count = 4096; }
+    }
+    1
+}
+
+unsafe extern "C" fn deep_tree_info(vm: VmId, object: JavaObject, info: *mut ContextInfo) -> i32 {
+    // SAFETY: the shared fixture writes to the supplied ContextInfo.
+    unsafe { limited_tree_info(vm, object, info); }
+    // A chain of 66 nodes exceeds the depth limit of 64 from the root.
+    unsafe { (*info).children_count = i32::from(object < 66); }
+    1
+}
+
+extern "C" fn next_child(_: VmId, object: JavaObject, _: i32) -> JavaObject {
+    object + 1
+}
+
+#[test]
+fn rejects_a_partial_match_before_fetching_children_over_the_node_limit() {
+    let mut library = test_library();
+    Rc::get_mut(&mut library).unwrap().info = wide_tree_info;
+    let root = Object::root(&library, &test_window()).expect("reachable root");
+    let failure = root.find("textbox", "A", &|| Ok(())).err().expect("node limit");
+    assert_eq!(failure.code, "ACTION");
+    assert!(failure.message.contains("traversal limit"));
+    RELEASED.with_borrow(|objects| assert!(objects.is_empty(), "children were fetched"));
+}
+
+#[test]
+fn rejects_a_partial_match_without_fetching_a_child_beyond_the_depth_limit() {
+    let mut library = test_library();
+    let bindings = Rc::get_mut(&mut library).unwrap();
+    bindings.info = deep_tree_info;
+    bindings.child = next_child;
+    let root = Object::root(&library, &test_window()).expect("reachable root");
+    let failure = root.find("textbox", "A", &|| Ok(())).err().expect("depth limit");
+    assert_eq!(failure.code, "ACTION");
+    assert!(failure.message.contains("traversal limit"));
+    RELEASED.with_borrow(|objects| {
+        assert_eq!(objects.len(), 64);
+        assert!(objects.iter().all(|&(vm, object)| vm == 7 && (2..=65).contains(&object)));
+    });
 }

@@ -8,7 +8,7 @@
 
 **Especificación.** [Arquitectura y contrato](../specs/2026-11-17-libreria-python-rust-design.md).
 
-**Estado.** La base Python/Rust está implementada y la versión `0.1.0` está publicada. Las tareas 1 a 3 están cerradas. El siguiente corte corresponde a la selección de ventanas y controles en la tarea 4.
+**Estado.** La base Python/Rust está implementada y la versión `0.1.0` está publicada. Las tareas 1 a 4 están cerradas. El siguiente corte corresponde al ciclo de vida y la recuperación del motor en la tarea 5.
 
 Marca cada paso al cumplir su criterio de cierre y registra allí la evidencia. Si una comprobación se registra en otro plan, enlaza su tarea.
 
@@ -74,14 +74,17 @@ El runner comprueba que la demo ya esté en ejecución y utiliza un perfil tempo
 
 ## Tarea 4 — selección y operaciones básicas
 
-**Archivos:** ampliar `jab/mod.rs`, `windows.rs` y `error.rs`; crear `rust/src/engine.rs` con los comandos tipados y sus pruebas.
+**Archivos.** `lib/rust/src/engine.rs`, `lib/rust/src/jab/{mod.rs,loader.rs,tests.rs}`, `lib/tests/test_selection.py` y `lib/tests/fixtures/SelectionForm.java`.
 
 **Contrato nativo:** `open_session(java_home) -> session_id`, `new_request(session_id, timeout_ms) -> request_id`, `prepare_window(session_id, title, pid, request_id) -> capture_id`, `wait_window(capture_id, request_id) -> window_id`, `attach_window(session_id, title, pid, request_id) -> window_id`, `read_text(window_id, role, name, request_id) -> str`, `fill(window_id, role, name, text, request_id) -> None`, `click(window_id, role, name, request_id) -> None`, `wait_closed(window_id, request_id) -> None`, `cancel_request(request_id) -> None` y `close_session(session_id) -> None`. `new_request` registra sin esperar al worker el identificador, el plazo monótono y el estado de cancelación; por eso se puede cancelar incluso antes de que comience `to_thread`. La preparación y espera de una captura comparten el plazo original. El binding puede encapsular estos identificadores en objetos Python internos; no son la API pública del usuario.
 
 - [x] Implementar el recorrido iterativo con límites, la normalización de rol y estado, `fill` con lectura de comprobación y el clic mediante una única acción accesible.
 - [x] Implementar reserva y vinculación de la ventana. La comprobación con Java iniciado de forma directa verificó captura, lectura, edición, confirmación y cierre mediante `page.desktop`.
-- [ ] Probar cero, una y múltiples coincidencias, filtros de PID, controles repetidos y límites del recorrido. Un recorrido truncado debe fallar aunque solo haya encontrado un candidato hasta ese punto.
-- [ ] Comprobar que terminar correctamente `expect_window()` mantiene la reserva hasta confirmar el cierre de ventana, página o sesión. Cubrir HWND reutilizado junto con la regresión de raíz obsoleta en la [tarea 5](#tarea-5--worker-integración-syncasync-y-recuperación).
+- [x] Verificar títulos sin coincidencia, selección por PID y rechazo de ventanas o controles duplicados. `expect_window()` distingue una ventana recién abierta de otra con el mismo título que ya existía.
+- [x] Rechazar un árbol que supere 4.096 nodos o 64 niveles de profundidad antes de pedir referencias fuera del límite, incluso si ya hay un candidato.
+- [x] Verificar que `expect_window()` conserva la reserva tras la captura y que se libera cuando se cierra la ventana, llega el evento de cierre de la página o termina la sesión. Una prueba con un HWND real y una raíz Java simulada verifica que el motor rechaza una acción si cambia la raíz asociada.
+
+**Verificación del corte.** Pasaron 11 pruebas Rust y 28 pruebas Python contra un wheel Windows x64 recién compilado. Se ejecutaron los cuatro casos de Swing con JDK 11.0.21. Para repetirlos en una sesión interactiva de Windows, indica el JDK en `PLAYWRIGHT_DESKTOP_TEST_JAVA_HOME` y ejecuta `py -m unittest discover -s lib/tests -p test_selection.py -v`.
 
 ## Tarea 5 — worker, integración sync/async y recuperación
 
