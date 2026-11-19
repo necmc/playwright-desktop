@@ -1,6 +1,7 @@
 from contextlib import contextmanager
 import os
 from pathlib import Path
+from shutil import copyfile
 import struct
 import subprocess
 import sys
@@ -8,7 +9,13 @@ from tempfile import TemporaryDirectory
 import unittest
 from uuid import uuid4
 
-from playwright_desktop import AmbiguousMatchError, DesktopBusyError, DesktopTimeoutError
+from playwright_desktop import (
+    AmbiguousMatchError,
+    DesktopBusyError,
+    DesktopConfigurationError,
+    DesktopTimeoutError,
+    StaleWindowError,
+)
 from playwright_desktop._runtime import Session
 from playwright_desktop._sync import Desktop
 from test_patch import FakePage
@@ -38,10 +45,10 @@ class WindowSelectionTests(unittest.TestCase):
         return f"Playwright desktop selection {uuid4().hex}"
 
     @contextmanager
-    def _desktop(self):
+    def _desktop(self, *, java_home=None):
         page = FakePage()
         desktop = Desktop(Session(page))
-        desktop.configure(java_home=self.java_home)
+        desktop.configure(java_home=self.java_home if java_home is None else java_home)
         try:
             yield page, desktop
         finally:
@@ -59,7 +66,7 @@ class WindowSelectionTests(unittest.TestCase):
             creationflags=subprocess.CREATE_NO_WINDOW,
         )
         self.addCleanup(self._stop_form, process)
-        return process.pid
+        return process
 
     @staticmethod
     def _stop_form(process):
@@ -72,10 +79,11 @@ class WindowSelectionTests(unittest.TestCase):
         first = self._start_form(title, "Primero")
         second = self._start_form(title, "Segundo")
 
-        for pid, expected in ((first, "Primero"), (second, "Segundo")):
-            with self.subTest(pid=pid), self._desktop() as (_, desktop):
-                field = desktop.window(title=title, pid=pid).get_by_role("textbox", name="Alias")
+        for process, expected in ((first, "Primero"), (second, "Segundo")):
+            with self.subTest(pid=process.pid), self._desktop() as (_, desktop):
+                field = desktop.window(title=title, pid=process.pid).get_by_role("textbox", name="Alias")
                 self.assertEqual(field.input_value(), expected)
+                self.assertEqual(field.input_value(timeout=0), expected)
 
         with self._desktop() as (_, desktop):
             with self.assertRaises(DesktopTimeoutError):
@@ -100,7 +108,7 @@ class WindowSelectionTests(unittest.TestCase):
         title = self._title()
         existing = self._start_form(title, "Existente")
         with self._desktop() as (_, desktop):
-            field = desktop.window(title=title, pid=existing).get_by_role("textbox", name="Alias")
+            field = desktop.window(title=title, pid=existing.pid).get_by_role("textbox", name="Alias")
             self.assertEqual(field.input_value(), "Existente")
 
         with self._desktop() as (_, desktop):
@@ -132,6 +140,38 @@ class WindowSelectionTests(unittest.TestCase):
                 with other.expect_window(title=second_title):
                     self._start_form(second_title, "Segundo")
                 self.assertEqual(other.get_by_role("textbox", name="Alias").input_value(), "Segundo")
+
+    def test_a_second_bridge_runtime_is_rejected_after_the_first_load(self):
+        title = self._title()
+        with self._desktop() as (_, desktop):
+            with desktop.expect_window(title=title):
+                self._start_form(title, "Primero")
+            self.assertEqual(desktop.get_by_role("textbox", name="Alias").input_value(), "Primero")
+
+        other_home = self.workdir / "second-runtime"
+        bridge = Path("bin/windowsaccessbridge-64.dll")
+        (other_home / bridge).parent.mkdir(parents=True, exist_ok=True)
+        copyfile(self.java_home / bridge, other_home / bridge)
+        with self._desktop(java_home=other_home) as (_, desktop):
+            with self.assertRaisesRegex(DesktopConfigurationError, "different Java bridge"):
+                with desktop.expect_window(title=self._title()):
+                    self.fail("A second runtime must not replace the loaded bridge.")
+
+    def test_a_window_closed_externally_is_stale_and_releases_the_engine(self):
+        first_title, second_title = self._title(), self._title()
+        with self._desktop() as (_, owner), self._desktop() as (_, other):
+            with owner.expect_window(title=first_title) as opened:
+                first = self._start_form(first_title, "Primero")
+
+            window = opened.value
+            self._stop_form(first)
+            with self.assertRaises(StaleWindowError):
+                window.get_by_role("textbox", name="Alias").input_value(timeout=0)
+            window.wait_for_closed(timeout=0)
+
+            with other.expect_window(title=second_title):
+                self._start_form(second_title, "Segundo")
+            self.assertEqual(other.get_by_role("textbox", name="Alias").input_value(), "Segundo")
 
 
 if __name__ == "__main__":

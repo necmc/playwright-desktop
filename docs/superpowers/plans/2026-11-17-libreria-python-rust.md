@@ -95,11 +95,13 @@ El runner comprueba que la demo ya esté en ejecución y utiliza un perfil tempo
 - [x] Implementar el worker con cola y mensajes Windows, `Python::detach`, `asyncio.to_thread` para las llamadas nativas y solicitudes cancelables antes de encolar. Las pruebas cubren plazos monótonos, cancelación previa y durante una operación nativa, respuesta del bucle durante una espera y cierre de sesión.
 - [x] Traducir los errores nativos a Python y comprobar que el timeout se puede capturar mediante el tipo público de Playwright.
 - [x] Ejecutar 19 pruebas Python contra el wheel instalado y 4 pruebas Rust en el corte de la base inicial.
-- [ ] Cubrir las regresiones de ciclo de vida en `lib/tests/` y las pruebas Rust. **Cierre.** Una petición corta en cola puede vencer sin invalidar una petición activa con plazo vigente. Un inicio nativo lento mantiene activo el bucle async. Cancelar la preparación libera la reserva incluso si ya se encoló. Una raíz Java obsoleta libera su ventana.
-- [ ] Verificar la afinidad al hilo propietario de JAB, el rechazo de un segundo runtime y que las llamadas y callbacks Playwright permanecen en su bucle original.
-- [ ] Verificar timeout cero, cierre de página, cierre prematuro de ventana, recolección y cierre explícito con solicitudes pendientes. Confirmar que las solicitudes canceladas o vencidas en cola se descartan.
+- [x] Cubrir las regresiones de ciclo de vida en `lib/tests/` y Rust. Una petición corta en cola puede vencer sin invalidar una petición activa con plazo vigente. El bucle async responde durante un inicio nativo lento. Una preparación cancelada libera la reserva antes de la siguiente solicitud, incluso si ya la había tomado. Una raíz Java obsoleta libera su ventana.
+- [x] Verificar que el worker consulta y libera las referencias JAB en su hilo, que se rechaza un segundo runtime y que el acceso a una página real de Playwright y su evento de cierre ocurren en el bucle original. La prueba de la página usó un motor de escritorio simulado.
+- [x] Verificar timeout cero, cierre de página, cierre externo de ventana, recolección y cierre explícito con solicitudes pendientes. Las pruebas del worker confirman que los comandos cancelados, vencidos o de sesiones cerradas se descartan antes de actuar.
 - [ ] Simular una llamada JAB bloqueada en un doble controlable, marcar el motor no utilizable al superar su plazo y rechazar solicitudes posteriores hasta reiniciar Python. Liberar el doble al terminar para que la prueba no deje un hilo bloqueado.
 - [ ] Tras las regresiones, reconstruir el wheel y repetir las pruebas Python contra la instalación resultante y las pruebas Rust del crate.
+
+**Verificación del primer corte.** Pasaron 15 pruebas Rust y 37 Python contra un wheel Windows x64 del corte, incluidas las pruebas Swing con JDK 11.0.21. También se verificó el evento de cierre de una página de Playwright en Edge sin interfaz.
 
 ## Tarea 6 — recorrido real de la demo
 

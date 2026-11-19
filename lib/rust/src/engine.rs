@@ -173,36 +173,7 @@ impl Engine {
             return Err(as_python(Failure::new("BRIDGE", "The native worker stopped. Restart Python.")));
         }
         let shared = self.shared.clone();
-        py.detach(move || {
-            match receiver.recv_timeout(state.deadline.saturating_duration_since(Instant::now())) {
-                Ok(result) => result,
-                Err(mpsc::RecvTimeoutError::Timeout) => {
-                    state.cancelled.store(true, Ordering::Release);
-                    let progress = shared.progress.load(Ordering::Acquire);
-                    let active_request = shared.active_request.load(Ordering::Acquire);
-                    // A deadline can coincide with a normal enumeration tick. Give the
-                    // worker a bounded opportunity to acknowledge cancellation before
-                    // classifying it as stuck inside a foreign native call.
-                    if shared.native_overdue() {
-                        for _ in 0..20 {
-                            if !shared.in_native.load(Ordering::Acquire) || shared.progress.load(Ordering::Acquire) != progress { break; }
-                            std::thread::sleep(Duration::from_millis(5));
-                        }
-                    }
-                    if shared.native_overdue() && shared.progress.load(Ordering::Acquire) == progress
-                        && shared.active_request.load(Ordering::Acquire) == active_request {
-                        shared.poisoned.store(true, Ordering::Release);
-                        Err(Failure::new("TIMEOUT", "A native bridge call exceeded its deadline; its effect may be unknown. Restart Python before using desktop actions again."))
-                    } else {
-                        Err(Failure::new("TIMEOUT", "No unique accessible Java window or control became ready before the deadline. Check the title, PID and Java Access Bridge configuration."))
-                    }
-                }
-                Err(mpsc::RecvTimeoutError::Disconnected) => {
-                    shared.poisoned.store(true, Ordering::Release);
-                    Err(Failure::new("BRIDGE", "The native worker stopped. Restart Python."))
-                }
-            }
-        }).map_err(as_python)
+        py.detach(move || shared.wait_for_reply(&state, receiver)).map_err(as_python)
     }
 
     fn close_session(&self, session_id: u64) {
@@ -225,6 +196,39 @@ impl Engine {
 }
 
 impl Shared {
+    fn wait_for_reply(&self, state: &RequestState, receiver: Receiver<Result<Reply>>) -> Result<Reply> {
+        match receiver.recv_timeout(state.deadline.saturating_duration_since(Instant::now())) {
+            Ok(result) => result,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                state.cancelled.store(true, Ordering::Release);
+                let progress = self.progress.load(Ordering::Acquire);
+                let active_request = self.active_request.load(Ordering::Acquire);
+                // A deadline can coincide with a normal enumeration tick. Give the
+                // worker time to acknowledge cancellation before marking it stuck.
+                if self.native_overdue() {
+                    for _ in 0..20 {
+                        if !self.in_native.load(Ordering::Acquire) || self.progress.load(Ordering::Acquire) != progress {
+                            break;
+                        }
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                }
+                if self.native_overdue() && self.progress.load(Ordering::Acquire) == progress
+                    && self.active_request.load(Ordering::Acquire) == active_request
+                {
+                    self.poisoned.store(true, Ordering::Release);
+                    Err(Failure::new("TIMEOUT", "A native bridge call exceeded its deadline; its effect may be unknown. Restart Python before using desktop actions again."))
+                } else {
+                    Err(Failure::new("TIMEOUT", "No unique accessible Java window or control became ready before the deadline. Check the title, PID and Java Access Bridge configuration."))
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                self.poisoned.store(true, Ordering::Release);
+                Err(Failure::new("BRIDGE", "The native worker stopped. Restart Python."))
+            }
+        }
+    }
+
     fn new(sender: Sender<Command>) -> Self {
         Self {
             sender,
@@ -276,27 +280,32 @@ impl Worker {
                 *self.shared.active_deadline.lock().unwrap() = None;
                 self.shared.progress.fetch_add(1, Ordering::Release);
             }
-            for _ in 0..pending.len() {
-                let command = pending.pop_front().unwrap();
-                let result = if self.shared.poisoned.load(Ordering::Acquire) {
-                    Err(Failure::new("BRIDGE", "The native engine is unavailable; restart Python."))
-                } else if let Err(error) = command.request.check() { Err(error) }
-                else {
-                    self.shared.active_request.store(command.request.id, Ordering::Release);
-                    *self.shared.active_deadline.lock().unwrap() = Some(command.request.deadline);
-                    self.shared.in_native.store(true, Ordering::Release);
-                    let result = self.step(&command);
-                    self.shared.in_native.store(false, Ordering::Release);
-                    *self.shared.active_deadline.lock().unwrap() = None;
-                    self.shared.progress.fetch_add(1, Ordering::Release);
-                    result
-                };
-                match result {
-                    Ok(None) if !command.request.immediate => pending.push_back(command),
-                    Ok(None) => self.complete(command, Err(Failure::new("TIMEOUT", "The requested accessible window or control is not ready (timeout=0)."))),
-                    Ok(Some(reply)) => self.complete(command, Ok(reply)),
-                    Err(error) => self.complete(command, Err(error)),
-                }
+            self.process_pending(&mut pending);
+        }
+    }
+
+    fn process_pending(&mut self, pending: &mut VecDeque<Command>) {
+        for _ in 0..pending.len() {
+            let command = pending.pop_front().unwrap();
+            let result = if self.shared.poisoned.load(Ordering::Acquire) {
+                Err(Failure::new("BRIDGE", "The native engine is unavailable; restart Python."))
+            } else if let Err(error) = command.request.check() {
+                Err(error)
+            } else {
+                self.shared.active_request.store(command.request.id, Ordering::Release);
+                *self.shared.active_deadline.lock().unwrap() = Some(command.request.deadline);
+                self.shared.in_native.store(true, Ordering::Release);
+                let result = self.step(&command);
+                self.shared.in_native.store(false, Ordering::Release);
+                *self.shared.active_deadline.lock().unwrap() = None;
+                self.shared.progress.fetch_add(1, Ordering::Release);
+                result
+            };
+            match result {
+                Ok(None) if !command.request.immediate => pending.push_back(command),
+                Ok(None) => self.complete(command, Err(Failure::new("TIMEOUT", "The requested accessible window or control is not ready (timeout=0)."))),
+                Ok(Some(reply)) => self.complete(command, Ok(reply)),
+                Err(error) => self.complete(command, Err(error)),
             }
         }
     }
@@ -313,10 +322,7 @@ impl Worker {
         let live: HashSet<u64> = self.shared.sessions.lock().unwrap().keys().copied().collect();
         let cancellations = std::mem::take(&mut *self.shared.captures_cancelled.lock().unwrap());
         for (session, capture) in cancellations { self.cancel(session, capture); }
-        let abandoned: Vec<(u64, u64)> = self.captures.iter()
-            .filter(|(_, capture)| capture.request.cancelled.load(Ordering::Acquire) || Instant::now() >= capture.request.deadline)
-            .map(|(id, capture)| (capture.session, *id)).collect();
-        for (session, capture) in abandoned { self.cancel(session, capture); }
+        self.discard_abandoned_capture();
         self.captures.retain(|_, capture| live.contains(&capture.session));
         self.closed.retain(|_, session| live.contains(session));
         self.validated_sessions.retain(|session| live.contains(session));
@@ -328,6 +334,13 @@ impl Worker {
             if self.lease.as_ref().is_some_and(|lease| lease.window == id) { self.lease = None; }
         }
         if self.lease.as_ref().is_some_and(|lease| !live.contains(&lease.session)) { self.lease = None; }
+    }
+
+    fn discard_abandoned_capture(&mut self) {
+        let Some(lease) = &self.lease else { return; };
+        if self.captures.get(&lease.capture).is_some_and(|capture| capture.request.check().is_err()) {
+            self.cancel(lease.session, lease.capture);
+        }
     }
 
     fn cancel(&mut self, session: u64, capture_id: u64) {
@@ -367,6 +380,7 @@ impl Worker {
         let library = self.library(request)?;
         let mut found = None;
         for window in Self::matches(title, pid)? {
+            request.check()?;
             if before.is_some_and(|before| before.contains(&(window.hwnd, window.pid))) { continue; }
             if let Some(root) = Object::root(&library, &window) {
                 if found.is_some() { return Err(Failure::new("AMBIGUOUS", format!("More than one accessible Java window matches {title:?}. Add a PID filter."))); }
@@ -374,6 +388,7 @@ impl Worker {
             }
         }
         if let Some((window, root)) = found {
+            request.check()?;
             let id = self.shared.next.fetch_add(1, Ordering::Relaxed);
             self.windows.insert(id, BoundWindow { session, window, root });
             if let Some(lease) = self.lease.as_mut() { lease.window = id; }
@@ -386,6 +401,8 @@ impl Worker {
         let request = &command.request;
         let args = &command.arguments;
         request.check()?;
+        // A preparation can be cancelled after cleanup and before the next queued command.
+        self.discard_abandoned_capture();
         match command.operation {
             Operation::PrepareCapture => self.prepare_capture(request, args),
             Operation::CompleteCapture => self.complete_capture(request, args.capture_id),
@@ -485,6 +502,7 @@ impl Worker {
         let control = match item.root.find(&args.role, &args.name, &check)? { Some(control) => control, None => return Ok(None) };
         check()?;
         if !control.ready(operation == WindowOperation::Fill)? { return Ok(None); }
+        check()?;
         let mut reply = Reply { handle: id, text: None };
         match (operation, args.role.as_str()) {
             (WindowOperation::ReadText, "textbox") => reply.text = Some(control.text()?),
@@ -512,7 +530,27 @@ mod tests {
         },
         core::w,
     };
-    use std::cell::Cell;
+    use std::cell::{Cell, RefCell};
+
+    fn session(id: u64) -> Arc<SessionState> {
+        Arc::new(SessionState { id, closed: AtomicBool::new(false), java_home: String::new() })
+    }
+
+    fn request(id: u64, session: Arc<SessionState>, deadline: Instant) -> Arc<RequestState> {
+        Arc::new(RequestState { id, session, deadline, immediate: false, cancelled: AtomicBool::new(false) })
+    }
+
+    fn test_worker() -> Worker {
+        let (sender, _receiver) = mpsc::channel();
+        Worker::new(Arc::new(Shared::new(sender)))
+    }
+
+    fn command(
+        request: Arc<RequestState>, operation: Operation, arguments: Arguments,
+    ) -> (Command, Receiver<Result<Reply>>) {
+        let (reply, receiver) = mpsc::channel();
+        (Command { request, operation, arguments, reply }, receiver)
+    }
 
     #[test]
     fn request_cancellation_and_closure_are_checked() {
@@ -532,7 +570,114 @@ mod tests {
     }
 
     #[test]
+    fn a_short_queued_deadline_does_not_poison_an_active_call_with_time_left() {
+        let mut worker = test_worker();
+        let shared = worker.shared.clone();
+        let now = Instant::now();
+        let owner = session(1);
+        let active = request(2, owner.clone(), now + Duration::from_secs(10));
+        let queued = request(3, owner, now + Duration::from_millis(25));
+        shared.active_request.store(active.id, Ordering::Release);
+        *shared.active_deadline.lock().unwrap() = Some(active.deadline);
+        shared.in_native.store(true, Ordering::Release);
+
+        let (queued_command, queued_reply) = command(queued.clone(), Operation::PrepareCapture, Arguments::default());
+        let mut pending = VecDeque::from([queued_command]);
+        shared.queued.store(1, Ordering::Release);
+        let error = shared.wait_for_reply(&queued, queued_reply).err().expect("queued request expired");
+        assert_eq!(error.code, "TIMEOUT");
+        assert!(queued.cancelled.load(Ordering::Acquire));
+        assert!(active.check().is_ok());
+        assert!(!shared.poisoned.load(Ordering::Acquire));
+
+        let (sender, receiver) = mpsc::channel();
+        sender.send(Ok(Reply { handle: 7, text: None })).unwrap();
+        assert_eq!(shared.wait_for_reply(&active, receiver).unwrap().handle, 7);
+        shared.in_native.store(false, Ordering::Release);
+        worker.process_pending(&mut pending);
+        assert!(pending.is_empty());
+        assert_eq!(shared.queued.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn pending_commands_with_expired_cancelled_or_closed_requests_are_discarded() {
+        let mut worker = test_worker();
+        let now = Instant::now();
+        let live = session(1);
+        let closed = session(2);
+        worker.shared.sessions.lock().unwrap().insert(closed.id, closed.clone());
+        let expired = request(1, live.clone(), now - Duration::from_millis(1));
+        let cancelled = request(2, live.clone(), now + Duration::from_secs(10));
+        let closing = request(3, closed.clone(), now + Duration::from_secs(10));
+        let valid = request(4, live, now + Duration::from_secs(10));
+
+        let mut pending = VecDeque::new();
+        let mut replies = Vec::new();
+        for state in [expired, cancelled.clone(), closing, valid] {
+            let (command, reply) = command(
+                state, Operation::Window(WindowOperation::Click),
+                Arguments { window_id: 7, ..Arguments::default() },
+            );
+            pending.push_back(command);
+            replies.push(reply);
+        }
+        worker.shared.queued.store(pending.len(), Ordering::Release);
+        cancelled.cancelled.store(true, Ordering::Release);
+        Engine { shared: worker.shared.clone() }.close_session(closed.id);
+        worker.process_pending(&mut pending);
+
+        for (reply, expected) in replies.into_iter().zip(["TIMEOUT", "CANCELLED", "CANCELLED", "STALE"]) {
+            let error = reply.try_recv().unwrap().err().expect("request rejected");
+            assert_eq!(error.code, expected);
+        }
+        assert!(pending.is_empty());
+        assert_eq!(worker.shared.queued.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn cancelling_a_queued_preparation_after_reservation_releases_it_before_the_next_command() {
+        let mut worker = test_worker();
+        worker.library = Some(test_library());
+        let owner = session(1);
+        let other = session(2);
+        worker.validated_sessions.extend([owner.id, other.id]);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        // Keep native handle IDs separate from the IDs assigned to the test requests.
+        let abandoned = request(10, owner, deadline);
+        let next = request(11, other, deadline);
+        let (prepare, first_reply) = command(abandoned.clone(), Operation::PrepareCapture, Arguments {
+            title: "First queued capture".into(), ..Arguments::default()
+        });
+        let mut pending = VecDeque::from([prepare]);
+        worker.shared.queued.store(1, Ordering::Release);
+        worker.process_pending(&mut pending);
+        let previous_capture = first_reply.try_recv().unwrap().unwrap().handle;
+        assert_eq!(worker.lease.as_ref().unwrap().capture, previous_capture);
+
+        // Cancellation arrives after the preparation ran, before another command in the queue.
+        abandoned.cancelled.store(true, Ordering::Release);
+        let (prepare, second_reply) = command(next, Operation::PrepareCapture, Arguments {
+            title: "Second queued capture".into(), ..Arguments::default()
+        });
+        pending.push_back(prepare);
+        worker.shared.queued.store(1, Ordering::Release);
+        worker.process_pending(&mut pending);
+        let capture = second_reply.try_recv().unwrap().expect("the next preparation can reserve the engine").handle;
+        assert!(!worker.captures.contains_key(&previous_capture));
+        assert_eq!(worker.lease.as_ref().unwrap().capture, capture);
+    }
+
+    #[test]
     fn a_reused_hwnd_cannot_route_an_action_to_a_different_java_root() {
+        assert_stale_root(4, "reused the handle", 2);
+    }
+
+    #[test]
+    fn an_unavailable_java_root_releases_the_window_on_the_worker_thread() {
+        assert_stale_root(0, "no longer accessible", 1);
+    }
+
+    fn assert_stale_root(next_root: JavaObject, expected_error: &str, expected_releases: usize) {
         struct HiddenWindow(HWND);
         impl Drop for HiddenWindow {
             fn drop(&mut self) {
@@ -543,15 +688,21 @@ mod tests {
 
         thread_local! {
             static ROOT: Cell<JavaObject> = const { Cell::new(1) };
+            static JAB_THREADS: RefCell<Vec<(bool, std::thread::ThreadId)>> = const { RefCell::new(Vec::new()) };
         }
 
         unsafe extern "C" fn current_root(_: HWND, vm: *mut VmId, object: *mut JavaObject) -> i32 {
+            JAB_THREADS.with_borrow_mut(|threads| threads.push((false, std::thread::current().id())));
             // SAFETY: Object::root passes writable out parameters.
             unsafe {
                 *vm = 7;
                 *object = ROOT.get();
             }
             1
+        }
+
+        extern "C" fn release(_: VmId, _: JavaObject) {
+            JAB_THREADS.with_borrow_mut(|threads| threads.push((true, std::thread::current().id())));
         }
 
         // SAFETY: STATIC is a system class and the window has no parent or callback data.
@@ -566,35 +717,37 @@ mod tests {
         };
         assert!(windows::valid(&window));
 
-        let mut library = test_library();
-        Rc::get_mut(&mut library).unwrap().context = current_root;
-        let root = Object::root(&library, &window).expect("original Java root");
-        let (sender, _receiver) = mpsc::channel();
-        let mut worker = Worker::new(Arc::new(Shared::new(sender)));
-        worker.library = Some(library);
-        let session = Arc::new(SessionState { id: 1, closed: AtomicBool::new(false), java_home: String::new() });
-        worker.windows.insert(2, BoundWindow { session: session.id, window, root });
-        worker.lease = Some(Lease { session: session.id, capture: 0, window: 2 });
-        let request = Arc::new(RequestState {
-            id: 3,
-            session,
-            deadline: Instant::now() + Duration::from_secs(1),
-            immediate: false,
-            cancelled: AtomicBool::new(false),
-        });
-        let (reply, _result) = mpsc::channel();
-        let action = Command {
-            request,
-            operation: Operation::Window(WindowOperation::Click),
-            arguments: Arguments { window_id: 2, role: "button".into(), name: "Confirmar".into(), ..Arguments::default() },
-            reply,
-        };
+        let worker = std::thread::spawn(move || {
+            let mut library = test_library();
+            let bindings = Rc::get_mut(&mut library).unwrap();
+            bindings.context = current_root;
+            bindings.release = release;
+            let root = Object::root(&library, &window).expect("original Java root");
+            let mut worker = test_worker();
+            worker.library = Some(library);
+            let owner = session(1);
+            worker.windows.insert(2, BoundWindow { session: owner.id, window, root });
+            worker.lease = Some(Lease { session: owner.id, capture: 0, window: 2 });
+            let request = request(3, owner, Instant::now() + Duration::from_secs(10));
+            let (action, result) = command(request, Operation::Window(WindowOperation::Click), Arguments {
+                window_id: 2, role: "button".into(), name: "Confirmar".into(), ..Arguments::default()
+            });
 
-        ROOT.set(4);
-        let error = worker.step(&action).err().expect("reject the changed Java root");
+            ROOT.set(next_root);
+            worker.shared.queued.store(1, Ordering::Release);
+            worker.process_pending(&mut VecDeque::from([action]));
+            let error = result.try_recv().unwrap().err().expect("reject the stale Java root");
+            assert!(!worker.windows.contains_key(&2));
+            assert!(worker.lease.is_none());
+            let calls = JAB_THREADS.with_borrow_mut(std::mem::take);
+            (error, calls)
+        });
+        let thread_id = worker.thread().id();
+        let (error, calls) = worker.join().unwrap();
         assert_eq!(error.code, "STALE");
-        assert!(error.message.contains("reused the handle"));
-        assert!(!worker.windows.contains_key(&2));
-        assert!(worker.lease.is_none());
+        assert!(error.message.contains(expected_error));
+        assert_eq!(calls.iter().filter(|(released, _)| *released).count(), expected_releases);
+        assert_eq!(calls.iter().filter(|(released, _)| !*released).count(), 2);
+        assert!(calls.iter().all(|(_, id)| *id == thread_id));
     }
 }

@@ -1,9 +1,11 @@
 import asyncio
+import gc
 import os
 from threading import Event, get_ident
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
+import weakref
 
 from playwright_desktop._async import Desktop
 from playwright_desktop._errors import BridgeUnavailableError, DesktopConfigurationError, DesktopTimeoutError
@@ -60,16 +62,16 @@ class AsyncTests(unittest.IsolatedAsyncioTestCase):
         self.session.close_nowait()
         self.engine_patch.stop()
 
-    async def wait_until_entered(self):
+    async def wait_until_set(self, event):
         async def ready():
-            while not self.engine.entered.is_set():
+            while not event.is_set():
                 await asyncio.sleep(0.001)
         await asyncio.wait_for(ready(), 1)
 
     async def test_native_wait_does_not_block_the_loop_or_use_the_page_thread(self):
         owner = get_ident()
         task = asyncio.create_task(self.desktop.window(title="My window").get_by_role("textbox", name="Alias").input_value())
-        await self.wait_until_entered()
+        await self.wait_until_set(self.engine.entered)
         self.assertFalse(task.done())
         self.assertNotEqual(self.engine.native_thread, owner)
         self.engine.release.set()
@@ -77,7 +79,7 @@ class AsyncTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_cancellation_marks_the_request_even_while_native_code_is_running(self):
         task = asyncio.create_task(self.desktop.window(title="My window").get_by_role("textbox", name="Alias").input_value())
-        await self.wait_until_entered()
+        await self.wait_until_set(self.engine.entered)
         task.cancel()
         with self.assertRaises(asyncio.CancelledError):
             await task
@@ -95,6 +97,95 @@ class AsyncTests(unittest.IsolatedAsyncioTestCase):
         alias = self.desktop.window(title="My window").get_by_role("textbox", name="Alias")
         self.assertEqual(await alias.input_value(), "Álias \U00010400")
         self.load_engine.assert_called_once_with()
+
+    async def test_slow_engine_start_does_not_block_the_event_loop(self):
+        started = Event()
+        release = Event()
+        self.engine.release.set()
+
+        def load():
+            started.set()
+            if not release.wait(3):
+                raise RuntimeError("The event loop did not release the engine startup.")
+            return self.engine
+
+        self.load_engine.side_effect = load
+        alias = self.desktop.window(title="My window").get_by_role("textbox", name="Alias")
+        task = asyncio.create_task(alias.input_value())
+        try:
+            await self.wait_until_set(started)
+            heartbeat = asyncio.Event()
+            asyncio.get_running_loop().call_soon(heartbeat.set)
+            await asyncio.wait_for(heartbeat.wait(), 1)
+            self.assertFalse(task.done())
+        finally:
+            release.set()
+            await task
+
+    async def test_page_access_and_close_callback_stay_in_the_owner_loop(self):
+        owner = (get_ident(), asyncio.get_running_loop())
+        observed = []
+
+        def record(action):
+            observed.append((action, (get_ident(), asyncio.get_running_loop())))
+
+        class Page(FakePage):
+            def on(self, event, callback):
+                record("register")
+                super().on(event, callback)
+
+            def is_closed(self):
+                record("check")
+                return False
+
+        page = Page()
+        session = Session(page)
+        self.addCleanup(session.close_nowait)
+        session.configure(java_home="C:/test-java")
+        desktop = Desktop(session)
+        self.engine.release.set()
+        alias = desktop.window(title="My window").get_by_role("textbox", name="Alias")
+        await alias.input_value()
+
+        def close_session(session_id):
+            record("close")
+            self.engine.closed.append(session_id)
+
+        with patch.object(self.engine, "close_session", side_effect=close_session):
+            page.callbacks["close"]()
+
+        self.assertEqual({action for action, _ in observed}, {"register", "check", "close"})
+        self.assertTrue(all(context == owner for _, context in observed))
+        self.assertNotEqual(self.engine.native_thread, owner[0])
+
+    async def test_page_event_collection_and_explicit_close_release_pending_sessions(self):
+        for close_by in ("page", "collection", "desktop"):
+            with self.subTest(close_by=close_by):
+                page = FakePage()
+                session = Session(page)
+                self.addCleanup(session.close_nowait)
+                session.configure(java_home="C:/test-java")
+                desktop = Desktop(session)
+                engine = Engine()
+                self.load_engine.return_value = engine
+                alias = desktop.window(title="My window").get_by_role("textbox", name="Alias")
+                task = asyncio.create_task(alias.input_value())
+                try:
+                    await self.wait_until_set(engine.entered)
+                    if close_by == "page":
+                        page.callbacks["close"]()
+                    elif close_by == "collection":
+                        page_ref = weakref.ref(page)
+                        del page
+                        gc.collect()
+                        self.assertIsNone(page_ref())
+                    else:
+                        await desktop.close()
+                    self.assertEqual(engine.closed, [1])
+                    self.assertFalse(task.done())
+                finally:
+                    engine.release.set()
+                    await task
 
     async def test_missing_java_home_is_reported_before_loading_the_engine(self):
         page = FakePage()
