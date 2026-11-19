@@ -97,8 +97,8 @@ class Session:
             raise DesktopConfigurationError("Capture a window with page.desktop.expect_window() first.")
         return self._captured_window
 
-    def _open_session(self, engine, backend_argument: str) -> None:
-        self._id = _native_call(engine.open_session, backend_argument)
+    def _open_session(self, engine, backend_argument: str | None) -> None:
+        self._id = _native_call(engine.open_auto_session, backend_argument, explicit=self._java_home is not None)
         self._engine = engine
 
     def _new_request(self, deadline: Deadline):

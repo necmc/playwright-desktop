@@ -1,23 +1,17 @@
-"""Configuration and loading of the Windows Java Access Bridge backend."""
+"""Load the desktop extension and resolve Java Access Bridge settings."""
 
 from importlib import import_module
 import os
 from pathlib import Path
-import sys
-import sysconfig
 
-from ._errors import DesktopConfigurationError, DesktopError, UnsupportedPlatformError
+from ._errors import DesktopError
+from ._platform import require_supported_platform
 
 MAX_JAB_TEXT_UNITS = 1023
 
 
 def load_extension():
-    if (
-        sys.platform != "win32"
-        or sysconfig.get_platform() != "win-amd64"
-        or sysconfig.get_config_var("Py_GIL_DISABLED")
-    ):
-        raise UnsupportedPlatformError("The native backend requires conventional CPython on Windows x64.")
+    require_supported_platform()
     try:
         return import_module("playwright_desktop._native")
     except ImportError as error:
@@ -31,12 +25,12 @@ def normalize_java_home(java_home: str | os.PathLike[str]) -> str:
     return str(Path(path).expanduser().absolute())
 
 
-def session_argument(java_home: str | None) -> str:
+def session_argument(java_home: str | None) -> str | None:
     if java_home is not None:
         return java_home
     if configured := os.environ.get("JAVA_HOME"):
         return normalize_java_home(configured)
-    raise DesktopConfigurationError("Set JAVA_HOME or call page.desktop.configure(java_home=...).")
+    return None
 
 
 def validate_text_capacity(utf16_units: int) -> None:

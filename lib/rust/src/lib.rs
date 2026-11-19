@@ -4,6 +4,7 @@ mod backend;
 mod engine;
 mod error;
 mod jab;
+mod uia;
 mod windows;
 
 pyo3::create_exception!(_native, NativeError, pyo3::exceptions::PyException);

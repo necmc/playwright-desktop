@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from os import PathLike
 
-from ._models import WindowQuery, validate_action_role, validate_control, validate_text
+from ._models import (
+    WindowQuery, validate_action_role, validate_click_role, validate_control, validate_scope, validate_text,
+)
 from ._timing import Deadline
 
 
@@ -58,10 +60,18 @@ class Window:
 
 
 class Locator:
-    def __init__(self, window, role, name):
+    def __init__(self, window, role, name, scope=None):
         self._window, self._role, self._name = window, role, name
+        self._scope = scope
+
+    def get_by_role(self, role: str, *, name: str) -> Locator:
+        validate_control(role, name)
+        scope = validate_scope(self._role, self._name, self._scope)
+        return Locator(self._window, role, name, scope)
 
     def _call(self, operation, timeout=None, **parameters):
+        if self._scope is not None:
+            parameters.update(scope_role=self._scope[0], scope_name=self._scope[1])
         return self._window._call(operation, timeout, role=self._role, name=self._name, **parameters)
 
     def fill(self, text: str, *, timeout: float | None = None) -> None:
@@ -74,7 +84,7 @@ class Locator:
         return self._call("read_text", timeout).text
 
     def click(self, *, timeout: float | None = None) -> None:
-        validate_action_role(self._role, "button", "click")
+        validate_click_role(self._role)
         self._call("click", timeout)
 
 

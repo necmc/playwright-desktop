@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
-from playwright_desktop import _backend
+from playwright_desktop import _backend, _platform
 from playwright_desktop._errors import DesktopConfigurationError, DesktopTimeoutError, UnsupportedPlatformError
 from playwright_desktop._models import WindowQuery, validate_control, validate_timeout, validate_text
 from playwright_desktop._runtime import Session
@@ -42,23 +42,34 @@ class ApiTests(unittest.TestCase):
         for platform, build_target in targets:
             with (
                 self.subTest(target=build_target),
-                patch.object(_backend.sys, "platform", platform),
-                patch.object(_backend.sysconfig, "get_platform", return_value=build_target),
+                patch.object(_platform.sys, "platform", platform),
+                patch.object(_platform.sysconfig, "get_platform", return_value=build_target),
                 patch.object(_backend, "import_module") as load_extension,
             ):
                 with self.assertRaises(UnsupportedPlatformError):
                     _backend.load_extension()
                 load_extension.assert_not_called()
 
-    def test_missing_java_home_is_reported_before_loading_the_engine(self):
+    def test_automatic_window_capture_requires_no_java_home(self):
         page = FakePage()
         desktop = Desktop(Session(page))
         with patch.dict(os.environ), patch("playwright_desktop._runtime._get_engine") as get_engine:
             os.environ.pop("JAVA_HOME", None)
-            with self.assertRaisesRegex(DesktopConfigurationError, "JAVA_HOME"):
-                with desktop.expect_window(title="Información del equipo"):
-                    self.fail("Capture should require a runtime directory.")
-        get_engine.assert_not_called()
+            with desktop.expect_window(title="Opciones"):
+                pass
+        get_engine.return_value.open_auto_session.assert_called_once_with(None, explicit=False)
+        desktop.close()
+
+    def test_a_popup_scope_is_sent_with_the_action(self):
+        page = FakePage()
+        session = Session(page)
+        desktop = Desktop(session)
+        with patch.object(session, "call", return_value=SimpleNamespace(handle=4)) as request:
+            popup = desktop.window(title="Edge", pid=42).get_by_role("dialog", name="Descargas")
+            popup.get_by_role("link", name="Abrir archivo").click()
+        self.assertEqual(request.call_args.kwargs["scope_role"], "dialog")
+        self.assertEqual(request.call_args.kwargs["scope_name"], "Descargas")
+        self.assertEqual(request.call_args.kwargs["role"], "link")
 
     def test_text_limit_counts_utf16_units_and_rejects_surrogates(self):
         validate_text("\U00010400" * 511 + "A")

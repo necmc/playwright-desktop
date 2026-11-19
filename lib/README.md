@@ -14,11 +14,11 @@ La versión mínima de Python es 3.10.
 
 | SO | Nativo | JVM |
 | --- | --- | --- |
-| Windows | | X |
+| Windows | X | X |
 | macOS | | |
 | Linux | | |
 
-El soporte JVM actual cubre Java Swing en Windows x64 con Java Access Bridge habilitado.
+En Windows x64, la librería selecciona el motor de cada ventana automáticamente. Usa UI Automation para accionar botones, enlaces y opciones de menú en aplicaciones nativas, y Java Access Bridge para Java Swing cuando el bridge está habilitado.
 
 ## Sintaxis básica
 
@@ -42,6 +42,8 @@ with page.expect_popup():
 ```
 
 Con Playwright asíncrono, usa `async with` y `await` en las acciones.
+
+Para una ventana que ya está abierta, usa `page.desktop.window(title="Opciones")` y busca sus controles con `get_by_role()`.
 
 ## Guardar la ventana
 

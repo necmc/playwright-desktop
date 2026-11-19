@@ -1,11 +1,15 @@
 use crate::error::{Failure, Result};
-use ::windows::Win32::Foundation::{HWND, LPARAM};
+use ::windows::Win32::Foundation::{CloseHandle, HWND, LPARAM};
+use ::windows::Win32::System::Threading::{
+    OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
+};
 use ::windows::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, EnumWindows, GetWindowTextLengthW, GetWindowTextW,
     GetWindowThreadProcessId, IsWindow, IsWindowVisible, MSG, PM_REMOVE,
     PeekMessageW, TranslateMessage,
 };
-use ::windows::core::BOOL;
+use ::windows::core::{BOOL, PWSTR};
+use std::path::PathBuf;
 
 #[derive(Clone, Debug)]
 pub struct Window {
@@ -24,6 +28,28 @@ pub fn valid(window: &Window) -> bool {
             && GetWindowThreadProcessId(hwnd(window.hwnd), Some(&mut pid)) != 0
             && pid == window.pid
     }
+}
+
+fn executable_path(window: &Window) -> Option<PathBuf> {
+    // SAFETY: the PID comes from the window, and the query uses a writable UTF-16 buffer.
+    let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, window.pid) }.ok()?;
+    let mut buffer = vec![0u16; 32768];
+    let mut length = buffer.len() as u32;
+    let result = unsafe {
+        let result = QueryFullProcessImageNameW(process, PROCESS_NAME_WIN32, PWSTR(buffer.as_mut_ptr()), &mut length);
+        let _ = CloseHandle(process);
+        result
+    };
+    result.ok()?;
+    Some(PathBuf::from(String::from_utf16(&buffer[..length as usize]).ok()?))
+}
+
+pub(crate) fn is_java_process(window: &Window) -> bool {
+    executable_path(window).is_some_and(|path| {
+        path.file_name().and_then(|name| name.to_str()).is_some_and(|name| {
+            name.eq_ignore_ascii_case("java.exe") || name.eq_ignore_ascii_case("javaw.exe")
+        })
+    })
 }
 
 unsafe extern "system" fn collect(handle: HWND, parameter: LPARAM) -> BOOL {

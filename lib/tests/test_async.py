@@ -8,7 +8,7 @@ from unittest.mock import patch
 import weakref
 
 from playwright_desktop._async import Desktop
-from playwright_desktop._errors import BridgeUnavailableError, DesktopConfigurationError, DesktopTimeoutError
+from playwright_desktop._errors import BridgeUnavailableError, DesktopTimeoutError
 from playwright_desktop._runtime import Session
 from test_patch import FakePage
 
@@ -29,7 +29,7 @@ class Engine:
         self.native_thread = None
         self.closed = []
 
-    def open_session(self, home):
+    def open_auto_session(self, home, *, explicit=False):
         return 1
 
     def new_request(self, session, timeout):
@@ -187,17 +187,17 @@ class AsyncTests(unittest.IsolatedAsyncioTestCase):
                     engine.release.set()
                     await task
 
-    async def test_missing_java_home_is_reported_before_loading_the_engine(self):
+    async def test_native_action_requires_no_java_home(self):
         page = FakePage()
         session = Session(page)
         desktop = Desktop(session)
         self.addCleanup(session.close_nowait)
+        self.engine.release.set()
         with patch.dict(os.environ):
             os.environ.pop("JAVA_HOME", None)
-            with self.assertRaisesRegex(DesktopConfigurationError, "JAVA_HOME"):
-                async with desktop.expect_window(title="My window"):
-                    self.fail("Capture should require a runtime directory.")
-        self.load_engine.assert_not_called()
+            with patch.object(self.engine, "open_auto_session", return_value=1) as open_session:
+                await desktop.window(title="Opciones").get_by_role("link", name="Abrir").click()
+        open_session.assert_called_once_with(None, explicit=False)
 
     async def test_native_timeout_preserves_its_original_cause(self):
         class NativeFailure(Exception):

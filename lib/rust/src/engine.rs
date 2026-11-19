@@ -1,7 +1,9 @@
 use crate::{
-    backend::{Backend, ControlAction, SessionOptions, TIMEOUT_MESSAGE, Target, WindowKey, WindowState},
+    backend::{Backend, ControlResult, SessionOptions, TIMEOUT_MESSAGE, WindowKey},
     error::{Failure, Result},
+    windows,
 };
+use providers::{Providers, WindowProvider};
 use pyo3::prelude::*;
 use std::{collections::{HashMap, HashSet, VecDeque},
     sync::{Arc, Condvar, Mutex, OnceLock, atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering}, mpsc::{self, Sender, Receiver}},
@@ -14,6 +16,7 @@ struct RequestState {
     deadline: Instant,
     immediate: bool,
     cancelled: AtomicBool,
+    action_pending: AtomicBool,
 }
 
 impl RequestState {
@@ -21,7 +24,14 @@ impl RequestState {
         if self.cancelled.load(Ordering::Acquire) || self.session.closed.load(Ordering::Acquire) {
             return Err(Failure::new("CANCELLED", "The desktop request or its session was cancelled."));
         }
-        if Instant::now() >= self.deadline { return Err(Failure::new("TIMEOUT", "The desktop request exceeded its deadline.")); }
+        if Instant::now() >= self.deadline {
+            let message = if self.action_pending.load(Ordering::Acquire) {
+                "The desktop action timed out after dispatch; its effect may be unknown."
+            } else {
+                "The desktop request exceeded its deadline."
+            };
+            return Err(Failure::new("TIMEOUT", message));
+        }
         Ok(())
     }
 }
@@ -51,7 +61,7 @@ impl NativeActivity {
 
 static SHARED: OnceLock<Mutex<Option<Arc<Shared>>>> = OnceLock::new();
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct Arguments {
     window_id: u64,
     capture_id: u64,
@@ -60,6 +70,8 @@ struct Arguments {
     role: String,
     name: String,
     text: String,
+    scope_role: String,
+    scope_name: String,
 }
 
 #[pyclass]
@@ -103,6 +115,13 @@ struct Command {
     operation: Operation,
     arguments: Arguments,
     reply: Sender<Result<Reply>>,
+    pending: Option<PendingCall>,
+}
+
+enum PendingCall {
+    ValidateJava { result: Receiver<Result<()>>, until: Option<Instant> },
+    ResolveWindowProvider { id: u64, java_recognition: Receiver<Result<bool>>, until: Instant },
+    Action { id: u64, result: Receiver<Result<Option<ControlResult>>> },
 }
 
 #[pyclass]
@@ -129,7 +148,7 @@ impl Engine {
             let (sender, receiver) = mpsc::channel();
             let shared = Arc::new(Shared::new(sender));
             let owner = shared.clone();
-            std::thread::Builder::new().name("playwright-desktop-jab".into())
+            std::thread::Builder::new().name("playwright-desktop-windows".into())
                 .spawn(move || {
                     let state = owner.clone();
                     if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| Worker::new(owner).run(receiver))).is_err() {
@@ -142,11 +161,13 @@ impl Engine {
     }
 
     fn open_session(&self, java_home: &str) -> PyResult<u64> {
-        self.healthy().map_err(as_python)?;
         let options = SessionOptions::java(java_home).map_err(as_python)?;
-        let id = self.shared.next.fetch_add(1, Ordering::Relaxed);
-        self.shared.sessions.lock().unwrap().insert(id, Arc::new(SessionState { id, closed: AtomicBool::new(false), options }));
-        Ok(id)
+        self.register_session(options)
+    }
+
+    #[pyo3(signature = (java_home=None, *, explicit=false))]
+    fn open_auto_session(&self, java_home: Option<&str>, explicit: bool) -> PyResult<u64> {
+        self.register_session(SessionOptions::automatic(java_home, explicit).map_err(as_python)?)
     }
 
     fn new_request(&self, session_id: u64, timeout_ms: u64) -> PyResult<Request> {
@@ -158,14 +179,14 @@ impl Engine {
         Ok(Request { state: Arc::new(RequestState {
             session,
             deadline: Instant::now() + Duration::from_millis(timeout),
-            immediate: timeout_ms == 0, cancelled: AtomicBool::new(false),
+            immediate: timeout_ms == 0, cancelled: AtomicBool::new(false), action_pending: AtomicBool::new(false),
         }) })
     }
 
-    #[pyo3(signature = (request, operation, *, window_id=0, capture_id=0, title="", pid=None, role="", name="", text=""))]
+    #[pyo3(signature = (request, operation, *, window_id=0, capture_id=0, title="", pid=None, role="", name="", text="", scope_role="", scope_name=""))]
     fn invoke(&self, py: Python<'_>, request: &Request, operation: &str,
               window_id: u64, capture_id: u64, title: &str, pid: Option<u32>,
-              role: &str, name: &str, text: &str) -> PyResult<Reply> {
+              role: &str, name: &str, text: &str, scope_role: &str, scope_name: &str) -> PyResult<Reply> {
         self.healthy().map_err(as_python)?;
         request.state.check().map_err(as_python)?;
         let operation = Operation::parse(operation).map_err(as_python)?;
@@ -176,7 +197,9 @@ impl Engine {
         let (sender, receiver) = mpsc::channel();
         let state = request.state.clone();
         let command = Command { request: state.clone(), operation,
-            arguments: Arguments { window_id, capture_id, title: title.into(), pid, role: role.into(), name: name.into(), text: text.into() }, reply: sender };
+            arguments: Arguments { window_id, capture_id, title: title.into(), pid, role: role.into(),
+                name: name.into(), text: text.into(), scope_role: scope_role.into(), scope_name: scope_name.into() },
+            reply: sender, pending: None };
         if self.shared.sender.send(command).is_err() {
             self.shared.queued.fetch_sub(1, Ordering::AcqRel);
             self.shared.poisoned.store(true, Ordering::Release);
@@ -198,6 +221,15 @@ impl Engine {
 }
 
 impl Engine {
+    fn register_session(&self, options: SessionOptions) -> PyResult<u64> {
+        self.healthy().map_err(as_python)?;
+        let id = self.shared.next.fetch_add(1, Ordering::Relaxed);
+        self.shared.sessions.lock().unwrap().insert(id, Arc::new(SessionState {
+            id, closed: AtomicBool::new(false), options,
+        }));
+        Ok(id)
+    }
+
     fn healthy(&self) -> Result<()> {
         if self.shared.poisoned.load(Ordering::Acquire) {
             Err(Failure::new("BRIDGE", "The shared desktop engine is unavailable after a native failure. Restart Python."))
@@ -213,6 +245,8 @@ impl Shared {
                 state.cancelled.store(true, Ordering::Release);
                 if self.mark_stalled_call() {
                     Err(Failure::new("TIMEOUT", "A native bridge call exceeded its deadline; its effect may be unknown. Restart Python before using desktop actions again."))
+                } else if state.action_pending.load(Ordering::Acquire) {
+                    Err(Failure::new("TIMEOUT", "The desktop action timed out after dispatch; its effect may be unknown."))
                 } else {
                     Err(Failure::new("TIMEOUT", TIMEOUT_MESSAGE))
                 }
@@ -270,30 +304,47 @@ impl Shared {
     }
 }
 
-struct Capture { session: u64, title: String, pid: Option<u32>, before: HashSet<WindowKey>, request: Arc<RequestState> }
-struct BoundWindow { session: u64, target: Target }
-struct Lease { session: u64, capture: u64, window: u64 }
+struct Capture {
+    session: u64,
+    title: String,
+    pid: Option<u32>,
+    before: HashSet<WindowKey>,
+    request: Arc<RequestState>,
+}
+
+struct BoundWindow {
+    session: u64,
+    window: windows::Window,
+    capture: Option<u64>,
+    provider: Option<WindowProvider>,
+}
 
 struct Worker {
-    shared: Arc<Shared>, backend: Backend, captures: HashMap<u64, Capture>,
-    windows: HashMap<u64, BoundWindow>, closed: HashMap<u64, u64>, lease: Option<Lease>,
+    shared: Arc<Shared>,
+    providers: Providers,
+    captures: HashMap<u64, Capture>,
+    windows: HashMap<u64, BoundWindow>,
+    closed: HashMap<u64, u64>,
+    live: HashSet<u64>,
 }
 
 impl Worker {
     fn new(shared: Arc<Shared>) -> Self {
-        Self { shared, backend: Backend::default(), captures: HashMap::new(), windows: HashMap::new(), closed: HashMap::new(), lease: None }
+        Self {
+            shared, providers: Providers::default(), captures: HashMap::new(),
+            windows: HashMap::new(), closed: HashMap::new(), live: HashSet::new(),
+        }
     }
 
     fn run(mut self, receiver: Receiver<Command>) {
         let shared = self.shared.clone();
         let mut pending = VecDeque::new();
         loop {
-            if let Ok(command) = receiver.recv_timeout(Duration::from_millis(if pending.is_empty() { 15 } else { 5 })) { pending.push_back(command); }
-            for command in receiver.try_iter().take(64) { pending.push_back(command); }
-            let _ = shared.run_native(Instant::now() + Duration::from_secs(10), || {
-                self.backend.poll();
-                self.cleanup();
-            });
+            if let Ok(command) = receiver.recv_timeout(Duration::from_millis(if pending.is_empty() { 15 } else { 5 })) {
+                pending.push_back(command);
+            }
+            pending.extend(receiver.try_iter().take(64));
+            let _ = shared.run_native(Instant::now() + Duration::from_secs(10), || self.cleanup());
             self.process_pending(&mut pending);
         }
     }
@@ -301,18 +352,18 @@ impl Worker {
     fn process_pending(&mut self, pending: &mut VecDeque<Command>) {
         let shared = self.shared.clone();
         for _ in 0..pending.len() {
-            let command = pending.pop_front().unwrap();
+            let mut command = pending.pop_front().unwrap();
             let result = if self.shared.poisoned.load(Ordering::Acquire) {
                 Err(Failure::new("BRIDGE", "The native engine is unavailable; restart Python."))
             } else if let Err(error) = command.request.check() {
                 Err(error)
             } else {
-                shared.run_native(command.request.deadline, || self.step(&command))
+                shared.run_native(command.request.deadline, || self.step(&mut command))
                     .unwrap_or_else(|| Err(Failure::new("BRIDGE", "The native engine is unavailable; restart Python.")))
             };
             match result {
-                Ok(None) if !command.request.immediate => pending.push_back(command),
-                Ok(None) => self.complete(command, Err(Failure::new("TIMEOUT", "The requested accessible window or control is not ready (timeout=0)."))),
+                Ok(None) if command.pending.is_some() || !command.request.immediate => pending.push_back(command),
+                Ok(None) => self.complete(command, Err(Failure::new("TIMEOUT", "The requested desktop window or control is not ready (timeout=0)."))),
                 Ok(Some(reply)) => self.complete(command, Ok(reply)),
                 Err(error) => self.complete(command, Err(error)),
             }
@@ -328,106 +379,170 @@ impl Worker {
     }
 
     fn cleanup(&mut self) {
+        self.providers.check_health();
         let live: HashSet<u64> = self.shared.sessions.lock().unwrap().keys().copied().collect();
         let cancellations = std::mem::take(&mut *self.shared.captures_cancelled.lock().unwrap());
         for (session, capture) in cancellations { self.cancel(session, capture); }
-        self.discard_abandoned_capture();
+        self.discard_abandoned_captures();
         self.captures.retain(|_, capture| live.contains(&capture.session));
         self.closed.retain(|_, session| live.contains(session));
-        self.backend.retain_sessions(&live);
-        let removed: Vec<u64> = self.windows.iter().filter(|(_, item)| !live.contains(&item.session) || !item.target.is_present()).map(|(id, _)| *id).collect();
+
+        let removed: Vec<u64> = self.windows.iter()
+            .filter(|(_, item)| !live.contains(&item.session) || !windows::valid(&item.window))
+            .map(|(id, _)| *id).collect();
         for id in removed {
-            if let Some(item) = self.windows.remove(&id) {
-                if live.contains(&item.session) { self.closed.insert(id, item.session); }
-            }
-            if self.lease.as_ref().is_some_and(|lease| lease.window == id) { self.lease = None; }
+            self.release_window(id, &live);
         }
-        if self.lease.as_ref().is_some_and(|lease| !live.contains(&lease.session)) { self.lease = None; }
+        if live != self.live {
+            self.providers.retain_sessions(live.clone());
+            self.live = live;
+        }
     }
 
-    fn discard_abandoned_capture(&mut self) {
-        let Some(lease) = &self.lease else { return; };
-        if self.captures.get(&lease.capture).is_some_and(|capture| capture.request.check().is_err()) {
-            self.cancel(lease.session, lease.capture);
-        }
+    fn discard_abandoned_captures(&mut self) {
+        self.captures.retain(|_, capture| capture.request.check().is_ok());
     }
 
     fn cancel(&mut self, session: u64, capture_id: u64) {
         if self.captures.get(&capture_id).is_some_and(|capture| capture.session == session) {
             self.captures.remove(&capture_id);
         }
-        if self.lease.as_ref().is_some_and(|lease| lease.session == session && lease.capture == capture_id) {
-            let lease = self.lease.take().unwrap();
-            self.windows.remove(&lease.window);
+        let owned = self.windows.iter().find(|(_, window)| {
+            window.session == session && window.capture == Some(capture_id)
+        }).map(|(id, _)| *id);
+        if let Some(id) = owned {
+            self.release_window(id, &HashSet::new());
         }
     }
 
-    fn discover(&mut self, request: &RequestState, title: &str, pid: Option<u32>, before: Option<&HashSet<WindowKey>>) -> Result<Option<u64>> {
+    fn require_owner(&self, session: u64) -> Result<()> {
+        if self.windows.values().any(|window| window.session != session)
+            || self.captures.values().any(|capture| capture.session != session) {
+            return Err(Failure::new("BUSY", "Another desktop flow is active. Close its window or desktop session first."));
+        }
+        Ok(())
+    }
+
+    fn discover(
+        &mut self, request: &RequestState, title: &str, pid: Option<u32>, capture: Option<(u64, &HashSet<WindowKey>)>,
+    ) -> Result<Option<u64>> {
         let session = request.session.id;
-        self.backend.prepare_session(session, &request.session.options, &|| request.check())?;
-        let mut found = None;
-        for window in self.backend.candidates(title, pid)? {
-            request.check()?;
-            if before.is_some_and(|before| before.contains(&window.key())) { continue; }
-            if let Some(target) = self.backend.attach(window)? {
-                if found.is_some() { return Err(Failure::new("AMBIGUOUS", format!("More than one accessible window matches {title:?}. Add a PID filter."))); }
-                found = Some(target);
-            }
+        self.require_owner(session)?;
+        let mut candidates = Backend::candidates(title, pid)?.into_iter()
+            .filter(|window| !capture.is_some_and(|(_, before)| before.contains(&window.key())));
+        let Some(candidate) = candidates.next() else { return Ok(None); };
+        if candidates.next().is_some() {
+            return Err(Failure::new("AMBIGUOUS", format!("More than one window matches {title:?}. Add a PID filter.")));
         }
-        if let Some(target) = found {
-            request.check()?;
-            let id = self.shared.next.fetch_add(1, Ordering::Relaxed);
-            self.windows.insert(id, BoundWindow { session, target });
-            if let Some(lease) = self.lease.as_mut() { lease.window = id; }
-            else { self.lease = Some(Lease { session, capture: 0, window: id }); }
-            Ok(Some(id))
-        } else { Ok(None) }
+        request.check()?;
+        if let Some((&id, _)) = self.windows.iter().find(|(_, item)| {
+            item.window.hwnd == candidate.0.hwnd && item.window.pid == candidate.0.pid
+        }) {
+            return Ok(Some(id));
+        }
+        let id = self.shared.next.fetch_add(1, Ordering::Relaxed);
+        self.windows.insert(id, BoundWindow {
+            session, window: candidate.0, capture: capture.map(|(id, _)| id), provider: None,
+        });
+        Ok(Some(id))
     }
 
-    fn step(&mut self, command: &Command) -> Result<Option<Reply>> {
-        let request = &command.request;
-        let args = &command.arguments;
-        request.check()?;
-        // A preparation can be cancelled after cleanup and before the next queued command.
-        self.discard_abandoned_capture();
+    fn step(&mut self, command: &mut Command) -> Result<Option<Reply>> {
+        command.request.check()?;
+        self.discard_abandoned_captures();
+        if let Some(pending) = command.pending.take() {
+            return self.resume(command, pending);
+        }
         match command.operation {
-            Operation::PrepareCapture => self.prepare_capture(request, args),
-            Operation::CompleteCapture => self.complete_capture(request, args.capture_id),
-            Operation::Window(operation) => self.operate_window(request, operation, args),
+            Operation::PrepareCapture if !command.request.session.options.automatic => {
+                self.require_owner(command.request.session.id)?;
+                command.pending = Some(PendingCall::ValidateJava {
+                    result: self.providers.validate_java(command.request.clone())?, until: None,
+                });
+                Ok(None)
+            }
+            Operation::PrepareCapture => {
+                if command.request.session.options.explicit_java_home {
+                    self.require_owner(command.request.session.id)?;
+                    if let Some(result) = self.providers.validate_loaded_java(command.request.clone()) {
+                        command.pending = Some(PendingCall::ValidateJava {
+                            result, until: Some(java_check_deadline(&command.request)),
+                        });
+                        return Ok(None);
+                    }
+                }
+                self.prepare_capture(&command.request, &command.arguments)
+            }
+            Operation::CompleteCapture => self.complete_capture(&command.request, command.arguments.capture_id),
+            Operation::Window(operation) => self.operate_window(command, operation),
+        }
+    }
+
+    fn resume(&mut self, command: &mut Command, pending: PendingCall) -> Result<Option<Reply>> {
+        match pending {
+            PendingCall::ValidateJava { result, until } => {
+                match receive(&result) {
+                    Ok(Some(response)) => response?,
+                    Ok(None) if until.is_none_or(|deadline| Instant::now() < deadline) => {
+                        command.pending = Some(PendingCall::ValidateJava { result, until });
+                        return Ok(None);
+                    }
+                    Err(error) if until.is_none() => return Err(error),
+                    _ => {},
+                }
+                self.prepare_capture(&command.request, &command.arguments)
+            }
+            PendingCall::ResolveWindowProvider { id, java_recognition, until } => {
+                let provider = match receive(&java_recognition) {
+                    Ok(Some(response)) => {
+                        if response? { WindowProvider::JavaAccessBridge } else { WindowProvider::UiAutomation }
+                    }
+                    Err(_) => WindowProvider::UiAutomation,
+                    Ok(None) if Instant::now() >= until => WindowProvider::UiAutomation,
+                    Ok(None) => {
+                        command.pending = Some(PendingCall::ResolveWindowProvider { id, java_recognition, until });
+                        return Ok(None);
+                    }
+                };
+                self.dispatch(command, id, provider)
+            }
+            PendingCall::Action { id, result } => {
+                let Some(response) = receive(&result)? else {
+                    command.pending = Some(PendingCall::Action { id, result });
+                    return Ok(None);
+                };
+                command.request.action_pending.store(false, Ordering::Release);
+                match response {
+                    Ok(Some(result)) => Ok(Some(Reply { handle: id, text: result.text })),
+                    Ok(None) => Ok(None),
+                    Err(error) => {
+                        if error.code == "STALE" { self.invalidate_window(id); }
+                        Err(error)
+                    }
+                }
+            }
         }
     }
 
     fn prepare_capture(&mut self, request: &Arc<RequestState>, args: &Arguments) -> Result<Option<Reply>> {
-        if self.lease.is_some() {
-            return Err(Failure::new("BUSY", "Another desktop flow is active. Close its window or desktop session first."));
-        }
         let session = request.session.id;
-        self.backend.prepare_session(session, &request.session.options, &|| request.check())?;
-        let before = self.backend.candidates(&args.title, args.pid)?
-            .into_iter()
-            .map(|window| window.key())
-            .collect();
+        self.require_owner(session)?;
+        let before = Backend::candidates(&args.title, args.pid)?.into_iter().map(|window| window.key()).collect();
         request.check()?;
         let id = self.shared.next.fetch_add(1, Ordering::Relaxed);
         self.captures.insert(id, Capture {
-            session,
-            title: args.title.clone(),
-            pid: args.pid,
-            before,
-            request: request.clone(),
+            session, title: args.title.clone(), pid: args.pid, before, request: request.clone(),
         });
-        self.lease = Some(Lease { session, capture: id, window: 0 });
         Ok(Some(Reply { handle: id, text: None }))
     }
 
     fn complete_capture(&mut self, request: &RequestState, capture_id: u64) -> Result<Option<Reply>> {
-        let capture = self.captures.get(&capture_id)
-            .filter(|capture| capture.session == request.session.id)
+        let capture = self.captures.get(&capture_id).filter(|capture| capture.session == request.session.id)
             .ok_or_else(|| Failure::new("CLOSED", "The window capture is no longer active."))?;
         let title = capture.title.clone();
         let pid = capture.pid;
         let before = capture.before.clone();
-        let Some(id) = self.discover(request, &title, pid, Some(&before))? else {
+        let Some(id) = self.discover(request, &title, pid, Some((capture_id, &before)))? else {
             return Ok(None);
         };
         self.captures.remove(&capture_id);
@@ -438,61 +553,96 @@ impl Worker {
         if args.window_id != 0 {
             return Ok(Some(args.window_id));
         }
-        let Some(lease) = &self.lease else {
-            return self.discover(request, &args.title, args.pid, None);
-        };
-        if lease.session != request.session.id || lease.window == 0 {
-            return Err(Failure::new("BUSY", "Another desktop flow is active."));
-        }
-        let item = self.windows.get(&lease.window)
-            .ok_or_else(|| Failure::new("STALE", "The desktop session's window is no longer available."))?;
-        if !item.target.matches(&args.title, args.pid) {
-            return Err(Failure::new("BUSY", "This session is already bound to a different desktop window."));
-        }
-        Ok(Some(lease.window))
+        self.discover(request, &args.title, args.pid, None)
     }
 
-    fn operate_window(
-        &mut self, request: &RequestState, operation: WindowOperation, args: &Arguments,
-    ) -> Result<Option<Reply>> {
-        let Some(id) = self.resolve_window(request, args)? else {
-            return Ok(None);
-        };
+    fn operate_window(&mut self, command: &mut Command, operation: WindowOperation) -> Result<Option<Reply>> {
+        let request = &command.request;
+        let Some(id) = self.resolve_window(request, &command.arguments)? else { return Ok(None); };
         let session = request.session.id;
         let waiting_for_close = operation == WindowOperation::WaitClosed;
         if waiting_for_close && self.closed.get(&id) == Some(&session) {
             return Ok(Some(Reply { handle: id, text: None }));
         }
-        let item = self.windows.get(&id).filter(|window| window.session == session)
-            .ok_or_else(|| Failure::new("STALE", "This native window is closed or belongs to another session."))?;
-        match item.target.state() {
-            WindowState::Closed => {
-                self.invalidate_window(id);
-                if waiting_for_close { return Ok(Some(Reply { handle: id, text: None })); }
-                return Err(Failure::new("STALE", "The native window no longer exists."));
-            }
-            WindowState::Inaccessible(_) if waiting_for_close => return Ok(None),
-            WindowState::Inaccessible(error) | WindowState::Replaced(error) => {
-                self.invalidate_window(id);
-                return Err(error);
-            }
-            WindowState::Ready => {}
+        let item = self.window(id, session)?;
+        if !windows::valid(&item.window) {
+            self.invalidate_window(id);
+            if waiting_for_close { return Ok(Some(Reply { handle: id, text: None })); }
+            return Err(Failure::new("STALE", "The native window no longer exists."));
         }
-        let action = match operation {
-            WindowOperation::ReadText => ControlAction::ReadText,
-            WindowOperation::Fill => ControlAction::Fill(&args.text),
-            WindowOperation::Click => ControlAction::Click,
-            WindowOperation::WaitClosed => return Ok(None),
-        };
-        Ok(item.target.perform(action, &args.role, &args.name, &|| request.check())?
-            .map(|result| Reply { handle: id, text: result.text }))
+        if waiting_for_close {
+            return Ok(None);
+        }
+        if let Some(provider) = item.provider {
+            return self.dispatch(command, id, provider);
+        }
+        self.resolve_window_provider(command, id, item.window.clone())
+    }
+
+    fn resolve_window_provider(&mut self, command: &mut Command, id: u64, window: windows::Window) -> Result<Option<Reply>> {
+        let request = &command.request;
+        if !request.session.options.automatic || windows::is_java_process(&window) {
+            return self.dispatch(command, id, WindowProvider::JavaAccessBridge);
+        }
+        let until = java_check_deadline(request);
+        match self.providers.check_java_window(request.clone(), window) {
+            Ok(java_recognition) => {
+                command.pending = Some(PendingCall::ResolveWindowProvider { id, java_recognition, until });
+                Ok(None)
+            }
+            Err(_) => self.dispatch(command, id, WindowProvider::UiAutomation),
+        }
+    }
+
+    fn dispatch(&mut self, command: &mut Command, id: u64, provider: WindowProvider) -> Result<Option<Reply>> {
+        let request = &command.request;
+        request.check()?;
+        self.window(id, request.session.id)?;
+        let item = self.windows.get_mut(&id).unwrap();
+        let provider = *item.provider.get_or_insert(provider);
+        let Operation::Window(operation) = command.operation else { unreachable!() };
+        let result = self.providers.act(provider, request.clone(), id, item.window.clone(), operation, command.arguments.clone())?;
+        if operation == WindowOperation::Click {
+            request.action_pending.store(true, Ordering::Release);
+        }
+        command.pending = Some(PendingCall::Action { id, result });
+        Ok(None)
+    }
+
+    fn window(&self, id: u64, session: u64) -> Result<&BoundWindow> {
+        self.windows.get(&id).filter(|window| window.session == session)
+            .ok_or_else(|| Failure::new("STALE", "This native window is closed or belongs to another session."))
     }
 
     fn invalidate_window(&mut self, id: u64) {
-        if let Some(item) = self.windows.remove(&id) { self.closed.insert(id, item.session); }
-        if self.lease.as_ref().is_some_and(|lease| lease.window == id) { self.lease = None; }
+        if let Some(item) = self.windows.remove(&id) {
+            self.closed.insert(id, item.session);
+            self.providers.release(id, item.provider);
+        }
+    }
+
+    fn release_window(&mut self, id: u64, live: &HashSet<u64>) {
+        if let Some(item) = self.windows.remove(&id) {
+            if live.contains(&item.session) { self.closed.insert(id, item.session); }
+            self.providers.release(id, item.provider);
+        }
     }
 }
+
+fn receive<T>(reply: &Receiver<T>) -> Result<Option<T>> {
+    match reply.try_recv() {
+        Ok(value) => Ok(Some(value)),
+        Err(mpsc::TryRecvError::Empty) => Ok(None),
+        Err(mpsc::TryRecvError::Disconnected) => Err(Failure::new("BRIDGE", "The desktop accessibility provider stopped.")),
+    }
+}
+
+fn java_check_deadline(request: &RequestState) -> Instant {
+    let now = Instant::now();
+    now + (request.deadline.saturating_duration_since(now) / 2).min(Duration::from_millis(500))
+}
+
+mod providers;
 
 #[cfg(test)]
 mod tests;
