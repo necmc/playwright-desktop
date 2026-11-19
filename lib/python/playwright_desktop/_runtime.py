@@ -13,7 +13,7 @@ from threading import Lock, get_ident
 import weakref
 
 from ._errors import DesktopError, DesktopClosedError, DesktopConfigurationError, DesktopTimeoutError, NATIVE_ERRORS, UnsupportedPlatformError
-from ._models import validate_timeout
+from ._models import WindowQuery, validate_timeout
 
 _lock = Lock()
 _engine = None
@@ -57,6 +57,7 @@ class Session:
         self._engine = None
         self._id = None
         self._closed = False
+        self._captured_window: tuple[WindowQuery, int] | None = None
         self.default_timeout = 10_000
         owner = weakref.ref(self)
 
@@ -90,6 +91,16 @@ class Session:
 
     def timeout(self, timeout):
         return self.default_timeout if timeout is None else validate_timeout(timeout)
+
+    def bind_captured_window(self, query: WindowQuery, handle: int) -> None:
+        self._check_owner()
+        self._captured_window = (query, handle)
+
+    def require_captured_window(self) -> tuple[WindowQuery, int]:
+        self._check_owner()
+        if self._captured_window is None:
+            raise DesktopConfigurationError("Capture a window with page.desktop.expect_window() first.")
+        return self._captured_window
 
     def prepare(self, timeout):
         self._check_owner()
@@ -139,5 +150,6 @@ class Session:
     def close_nowait(self):
         if not self._closed:
             self._closed = True
+            self._captured_window = None
             if self._engine is not None:
                 self._engine.close_session(self._id)

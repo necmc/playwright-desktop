@@ -73,7 +73,7 @@ La separación corresponde a responsabilidades concretas. La lógica de selecci�
 
 Cada build limpia únicamente sus artefactos. Python utiliza `dist/python/` y `rust/target/python/`; sus scripts no eliminan las carpetas de otros SDK.
 
-La automatización de la demo sigue Page Object Model (POM) con un único escenario funcional. El test muestra la importación, configuración y captura con `page.desktop` y conserva las aserciones. El Page Object Java recibe la ventana devuelta por `page.desktop.expect_window()` y encapsula locators y acciones. Se ejecuta con `py demo/pc-info-automation/run.py`, sin variables especiales ni descubrimiento manual. Las comprobaciones del motor y de concurrencia pertenecen a las pruebas de la librería.
+La automatización de la demo sigue Page Object Model (POM) con un único escenario funcional. El test muestra la importación, la captura con `page.desktop.expect_window()` y las aserciones. El Page Object Java recibe la ventana capturada mediante `opened.value` y encapsula locators y acciones. La fixture prepara el runtime de Java. Se ejecuta con `py demo/pc-info-automation/run.py`, sin variables especiales ni descubrimiento manual. Las comprobaciones del motor y de concurrencia pertenecen a las pruebas de la librería.
 
 Cada demo conserva su aplicación en `demo/<nombre>/` y todos los flujos que utilizan la librería en `demo/<nombre>-automation/`. Las pruebas internas de la librería pertenecen a `lib/tests/`.
 
@@ -163,22 +163,21 @@ with sync_playwright() as playwright:
     page.desktop.configure(java_home="C:/ruta/openjdk")
     page.goto("http://127.0.0.1:18765")
 
-    with page.desktop.expect_window(title="Información del equipo", timeout=15_000) as opened:
+    with page.desktop.expect_window(title="Información del equipo", timeout=15_000):
         page.get_by_role("button", name="Obtener información").click()
 
-    form = opened.value
-    form.get_by_role("textbox", name="Alias").fill("Prueba local")
-    form.get_by_role("button", name="Confirmar").click()
-    form.wait_for_closed(timeout=10_000)
+    page.desktop.get_by_role("textbox", name="Alias").fill("Prueba local")
+    page.desktop.get_by_role("button", name="Confirmar").click()
+    page.desktop.wait_for_closed(timeout=10_000)
     page.get_by_text("Información recibida. El PDF está listo.").wait_for()
     browser.close()
 ```
 
-La variante async conserva los imports de `playwright.async_api`, utiliza `async with page.desktop.expect_window(...)`, `await` para las acciones nativas y `await opened.value`. `get_by_role()` construye una consulta local y no requiere `await`, igual que un locator web.
+La variante async conserva los imports de `playwright.async_api`, utiliza `async with page.desktop.expect_window(...)` y `await` para las acciones nativas. `get_by_role()` construye una consulta local y no requiere `await`, igual que un locator web.
 
 `configure()` y `set_default_timeout()` actualizan estado Python local y tampoco requieren `await`. El cierre explícito se escribe `page.desktop.close()` en sync y `await page.desktop.close()` en async. Salir de un contexto de captura por una excepción cancela la captura sin ocultar la excepción original del código web.
 
-`page.desktop.window(title=..., pid=None)` permite adjuntarse a una ventana existente mediante una consulta diferida; su primera acción espera una coincidencia única. `expect_window()` toma una instantánea antes del clic web y espera una ventana nueva. El timeout predeterminado del escritorio es 10 000 ms y puede cambiarse con `page.desktop.set_default_timeout(ms)`. Se acepta cero como comprobación inmediata, sin espera.
+`page.desktop.window(title=..., pid=None)` permite adjuntarse a una ventana existente mediante una consulta diferida. Su primera acción espera una coincidencia única. `expect_window()` toma una instantánea antes del clic web, espera una ventana nueva y la asocia al `page.desktop` de esa página al salir del contexto. `get_by_role()` y `wait_for_closed()` usan el identificador nativo capturado y requieren una captura exitosa previa. El objeto devuelto por `as opened` conserva `.value` para quien necesite guardar una referencia explícita a la ventana. El timeout predeterminado es 10 000 ms y puede cambiarse con `page.desktop.set_default_timeout(ms)`. Cero hace una comprobación inmediata.
 
 El MVP expone `get_by_role("textbox" | "button", name=...)`, `fill(text, timeout=...)`, `input_value(timeout=...)`, `click(timeout=...)` y `wait_for_closed(timeout=...)`. `input_value` y `fill` solo aplican a campos de texto; `click` solo a botones. La coincidencia es exacta, sensible a mayúsculas y basada en nombre accesible. Un rol no soportado se rechaza antes de llamar a Rust.
 

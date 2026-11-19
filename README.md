@@ -17,9 +17,11 @@ Sobre un `page` que ya tengas creado con Playwright:
 ```python
 import playwright_desktop
 
-window = page.desktop.window(title="Mi aplicación")
-window.get_by_role("textbox", name="Nombre").fill("Valor")
-window.get_by_role("button", name="Aceptar").click()
+with page.desktop.expect_window(title="Mi aplicación"):
+    page.get_by_role("button", name="Abrir aplicación").click()
+
+page.desktop.get_by_role("textbox", name="Nombre").fill("Ana")
+page.desktop.get_by_role("button", name="Aceptar").click()
 ```
 
 Con la API asíncrona de Playwright, utiliza `await` en acciones como `fill()` y `click()`. Los imports y las acciones web habituales se conservan.

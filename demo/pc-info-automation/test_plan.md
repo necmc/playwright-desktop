@@ -36,10 +36,10 @@ Datos de prueba: fecha `2026-11-19`, equipo `EQUIPO-CLICKONCE` y alias `Integrac
 | Ruta | Responsabilidad |
 | --- | --- |
 | `run.py` | Verifica la disponibilidad de la demo y ejecuta el caso sin parámetros. |
-| `tests/test_flow.py` | Define los datos, el recorrido y los resultados esperados. Captura la ventana con `page.desktop.expect_window()`. |
+| `tests/test_flow.py` | Define el recorrido y sus resultados esperados. Captura la ventana con `page.desktop.expect_window()` y la entrega al Page Object con `opened.value`. |
 | `pages/` | `InformationPage` concentra locators y acciones de la web. `InformationForm` maneja los controles de la ventana Java capturada. |
 | `models/` | Contiene `EquipmentInformation`, el DTO con los tres datos que se comparan a lo largo del flujo. |
-| `fixtures/` | Selecciona y prepara el navegador, y libera los recursos de cada prueba. |
+| `fixtures/` | Selecciona el navegador, configura el runtime y libera los recursos de cada prueba. |
 | `utils/` | Extrae el texto del PDF para comprobar su contenido. |
 | `config.py` | Define la URL y el plazo de espera, y lee el runtime de la demo. |
 

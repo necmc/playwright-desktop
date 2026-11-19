@@ -14,7 +14,7 @@ Marca cada paso al cumplir su criterio de cierre y registra allí la evidencia. 
 
 ## Restricciones globales
 
-La automatización de la demo utiliza **Page Object Model (POM)** y un único escenario funcional. El test contiene el recorrido, sus aserciones, la importación de `playwright_desktop` y las llamadas `page.desktop.configure()`, `set_default_timeout()` y `expect_window()`. El Page Object Java recibe la ventana capturada y encapsula los locators y las acciones. `fixtures/` prepara el navegador, `config.py` contiene la configuración y `utils/` extrae el texto del PDF. Mantener unittest, sin nuevas dependencias ni capas genéricas de acciones. Las pruebas del motor pertenecen a la librería.
+La automatización de la demo utiliza **Page Object Model (POM)** y un único escenario funcional. El test contiene el recorrido, sus aserciones, la importación de `playwright_desktop` y la llamada a `page.desktop.expect_window()`. El Page Object Java recibe la ventana capturada mediante `opened.value` y encapsula los locators y las acciones. `fixtures/` prepara el navegador y el runtime, `config.py` contiene la configuración y `utils/` extrae el texto del PDF. Mantener unittest, sin nuevas dependencias ni capas genéricas de acciones. Las pruebas del motor pertenecen a la librería.
 
 El runner comprueba que la demo ya esté en ejecución y utiliza un perfil temporal de navegador, salvo que se haya preparado uno para extensiones. Los comandos de la demo evitan escribir caché de bytecode Python. El runner no genera capturas, JSON de descargas ni logs Java automáticamente.
 
@@ -55,6 +55,7 @@ El runner comprueba que la demo ya esté en ejecución y utiliza un perfil tempo
 
 - [x] Implementar y probar el parche transaccional sobre las clases oficiales sync y async: idempotencia, recarga, carga diferida, colisión, reversión y conservación de las acciones web.
 - [x] Añadir estado débil por página, configuración por fachada y cierre solicitado desde el evento público `Page.on("close", ...)`. Las pruebas cubren referencias débiles y validaciones de títulos, PID, roles, nombres, plazos y texto.
+- [x] Asociar la captura exitosa a su página. En sync y async, `page.desktop.get_by_role()` y `wait_for_closed()` usan la ventana capturada. El contexto conserva `.value` para las referencias explícitas.
 
 ## Tarea 3 — acceso a Windows y cliente JAB
 

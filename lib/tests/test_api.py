@@ -1,10 +1,14 @@
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
-from playwright_desktop._errors import DesktopTimeoutError
+from playwright_desktop._errors import DesktopConfigurationError, DesktopTimeoutError
 from playwright_desktop._models import WindowQuery, validate_control, validate_timeout, validate_text
+from playwright_desktop._runtime import Session
+from playwright_desktop._sync import Desktop
+from test_patch import FakePage
 
 
 class ApiTests(unittest.TestCase):
@@ -37,6 +41,25 @@ class ApiTests(unittest.TestCase):
         for text in ("\U00010400" * 512, "A\0B", "\ud800"):
             with self.assertRaises(ValueError):
                 validate_text(text)
+
+    def test_desktop_actions_use_the_window_captured_without_an_event_variable(self):
+        page = FakePage()
+        session = Session(page)
+        desktop = Desktop(session)
+        with self.assertRaisesRegex(DesktopConfigurationError, "expect_window"):
+            desktop.get_by_role("button", name="Confirmar")
+
+        replies = [SimpleNamespace(handle=handle) for handle in (1, 2, 2, 2, 2)]
+        with patch.object(session, "call", side_effect=replies) as request:
+            with desktop.expect_window(title="Información del equipo"):
+                pass
+            desktop.get_by_role("textbox", name="Alias").fill("QA")
+            desktop.get_by_role("button", name="Confirmar").click()
+            desktop.wait_for_closed()
+
+        self.assertEqual([call.args[0] for call in request.call_args_list],
+                         ["prepare", "capture", "fill", "click", "wait_closed"])
+        self.assertEqual([call.kwargs["window_id"] for call in request.call_args_list[2:]], [2, 2, 2])
 
 
 if __name__ == "__main__":

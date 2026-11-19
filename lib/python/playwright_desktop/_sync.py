@@ -26,6 +26,16 @@ class Desktop:
     def expect_window(self, *, title: str, pid: int | None = None, timeout: float | None = None) -> WindowExpectation:
         return WindowExpectation(self._session, WindowQuery(title, pid), timeout)
 
+    def get_by_role(self, role: str, *, name: str) -> Locator:
+        return self._captured_window().get_by_role(role, name=name)
+
+    def wait_for_closed(self, *, timeout: float | None = None) -> None:
+        self._captured_window().wait_for_closed(timeout=timeout)
+
+    def _captured_window(self) -> Window:
+        query, handle = self._session.require_captured_window()
+        return Window(self._session, query, handle)
+
     def close(self) -> None:
         self._session.close_nowait()
 
@@ -106,6 +116,7 @@ class WindowExpectation:
             if self._timeout and not remaining:
                 raise DesktopTimeoutError("The desktop window capture timed out during the web action.")
             reply = self._session.call("capture", capture_id=self._capture, timeout=remaining)
+            self._session.bind_captured_window(self._query, reply.handle)
             self._info._value = Window(self._session, self._query, reply.handle)
         except BaseException:
             self._session.cancel_capture(self._capture)

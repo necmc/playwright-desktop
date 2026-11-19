@@ -107,6 +107,19 @@ class AsyncTests(unittest.IsolatedAsyncioTestCase):
                     await self.desktop.window(title="My window").get_by_role("textbox", name="Alias").input_value()
         self.assertIsInstance(captured.exception.__cause__, NativeFailure)
 
+    async def test_desktop_actions_and_event_value_use_the_same_captured_window(self):
+        replies = [SimpleNamespace(handle=handle, text="QA") for handle in (1, 2, 2, 2)]
+        with patch.object(self.engine, "invoke", side_effect=replies) as invoke:
+            async with self.desktop.expect_window(title="My window") as opened:
+                pass
+            window = await opened.value
+            self.assertEqual(await self.desktop.get_by_role("textbox", name="Alias").input_value(), "QA")
+            await window.get_by_role("button", name="Confirmar").click()
+
+        self.assertEqual([call.args[1] for call in invoke.call_args_list],
+                         ["prepare", "capture", "read_text", "click"])
+        self.assertEqual([call.kwargs["window_id"] for call in invoke.call_args_list[2:]], [2, 2])
+
 
 if __name__ == "__main__":
     unittest.main()
