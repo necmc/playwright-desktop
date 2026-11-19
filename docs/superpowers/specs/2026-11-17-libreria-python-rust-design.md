@@ -160,7 +160,7 @@ lto = "thin"
 codegen-units = 1
 ```
 
-Son las versiones base del diseño. La evidencia de compatibilidad se registra en el [plan de implementación](../plans/2026-11-17-libreria-python-rust.md#tarea-7--distribución-documentación-y-medidas). Una versión fuera del intervalo debe producir un diagnóstico claro y no un parche parcial.
+Son las versiones base del diseño. La evidencia de compatibilidad se registra en el [plan de implementación](../plans/2026-11-17-libreria-python-rust.md#tarea-7--compatibilidad-rendimiento-y-revisión-final). Una versión fuera del intervalo debe producir un diagnóstico claro y no un parche parcial.
 
 Se usa Maturin para el wheel mixto y PyO3 con ABI estable para CPython convencional 3.10 a 3.14 en Windows x64. Los builds free-threaded, PyPy y otras plataformas quedan fuera de la matriz inicial. Los usuarios de un wheel precompilado no necesitan Rust; compilar desde fuentes requiere Rust MSVC y las herramientas C++ de Windows. Se conserva el uso de Python global mediante `pip install --user`, sin exigir un entorno virtual.
 

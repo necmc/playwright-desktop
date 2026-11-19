@@ -8,7 +8,7 @@
 
 **Especificación.** [Arquitectura y contrato](../specs/2026-11-17-libreria-python-rust-design.md).
 
-**Estado.** La base Python/Rust está implementada y la versión `0.1.0` está publicada. Las tareas 1 a 5 están cerradas. El siguiente corte corresponde al recorrido completo de la demo en la tarea 6.
+**Estado.** Las tareas 1 a 5 están cerradas. El siguiente corte corresponde al recorrido completo de la demo en la tarea 6.
 
 Marca cada paso al cumplir su criterio de cierre y registra allí la evidencia. Si una comprobación se registra en otro plan, enlaza su tarea.
 
@@ -65,7 +65,7 @@ El runner comprueba que la demo ya esté en ejecución y utiliza un perfil tempo
 
 - [x] Implementar las llamadas de `windows-rs`, la carga JAB desde el runtime seleccionado, la decodificación UTF-16 y la liberación con RAII. Los diagnósticos de bridge ausente y arquitectura incorrecta tienen cobertura automatizada.
 - [x] Contrastar tamaños, alineaciones y offsets del ABI con una sonda C compilada con los headers del JDK. La sonda queda fuera del wheel.
-- [x] Cargar el bridge e identificar la raíz de un formulario real en Windows. El orquestador de la demo permite habilitarlo mediante `-EnableAccessBridge`.
+- [x] Cargar el bridge e identificar la raíz de un formulario real en Windows. El lanzador activa el puente al iniciar Java.
 - [x] Comprobar los diagnósticos de ruta Java sin configurar, DLL ausente, arquitectura x86 y símbolo `Windows_run` faltante.
 - [x] Rechazar una lectura si el rango UTF-16 termina antes de la longitud anunciada o carece de terminador. Las pruebas verifican la liberación del candidato y de los hijos pendientes si falla la decodificación del árbol.
 - [x] Verificar Swing con JDK 11.0.21. La ventana visible agotó la espera con Java Access Bridge deshabilitado en un perfil temporal. Al habilitar el bridge en el proceso JVM, se leyó y editó el mismo control con 1.023 unidades UTF-16, incluido un carácter suplementario.
@@ -109,25 +109,23 @@ El runner comprueba que la demo ya esté en ejecución y utiliza un perfil tempo
 
 **Archivos:** `demo/pc-info-automation/run.py` y `tests/test_flow.py`, con Page Objects en `pages/` y preparación en `fixtures/`. Instrucciones en `demo/README.md`, único README de las demos. Los casos técnicos del motor se verifican como parte de la librería.
 
-**Consume:** demo compilada, OpenJDK con JAB activo, Edge con activación ClickOnce disponible y wheel instalado. **Produce:** evidencia del recorrido que utiliza la clase oficial `Page` con una sola importación adicional.
+**Consume:** demo compilada, navegador compatible con ClickOnce y wheel instalado. **Produce:** evidencia de la integración de `page.desktop` con la clase oficial `Page`.
 
-Ejecutar en serie las verificaciones de escritorio. La captura debe distinguir las ventanas de la operación mediante los filtros y criterios de la [tarea 4](#tarea-4--selección-y-operaciones-básicas).
+Ejecutar en serie las verificaciones de escritorio. La captura debe distinguir las ventanas de la operación mediante los filtros y criterios de la [tarea 4 de la librería](#tarea-4--selección-y-operaciones-básicas). El cierre también requiere aprobar PC-01 con Python sync y revisar la vista previa del PDF, según la [tarea 4 de pc-info](2026-11-17-demo-clickonce-java.md#tarea-4--recorrido-y-documentación).
 
 - [x] Organizar un único escenario funcional sync con POM, configuración y fixtures. Se ejecuta con `py demo/pc-info-automation/run.py` y la demo ya levantada. Las comprobaciones técnicas del motor pertenecen a `lib/`.
 - [x] Verificar por separado la web y el contenido textual del PDF en Edge headless, simulando la confirmación HTTP. Con Java iniciado directamente también pasaron la captura, la edición, el cierre y las comprobaciones de la web y del PDF.
-- [ ] Diagnosticar la captura de Java tras ClickOnce. Registrar título, tiempos y errores del lanzador y del proceso Java. **Cierre.** Con la [activación desde Edge](2026-11-17-demo-clickonce-java.md#tarea-3--lanzador-y-publicación) comprobada, `expect_window()` captura la ventana de la operación y la limpieza se limita a los procesos del flujo. El 19 de noviembre de 2026, el escenario PC-01 agotó la espera de Java al solicitar la apertura desde Edge.
-- [ ] Completar el recorrido sync PC-01 con el [plan de pruebas](../../../demo/pc-info-automation/test_plan.md). **Cierre.** Desde el botón web, editar los tres campos en Java, confirmar, verificar el cierre y los datos de la web, comprobar el texto del PDF y revisar visualmente la vista previa en el navegador.
-- [ ] Completar la comprobación async del mismo recorrido. Las regresiones de cancelación y respuesta del bucle se cubren en la [tarea 5](#tarea-5--worker-integración-syncasync-y-recuperación). Mantener un único escenario en la automatización de ejemplo.
+- [ ] Diagnosticar la espera de `expect_window()` tras la [activación de ClickOnce](2026-11-17-demo-clickonce-java.md#tarea-3--lanzador-y-publicación). Registrar el título, los tiempos y los errores observados. **Cierre.** Se captura la ventana de la operación y la limpieza se limita a los procesos del flujo. El 19 de noviembre de 2026, PC-01 agotó la espera de Java al solicitar la apertura desde Edge.
+- [ ] Verificar la API async de la librería con los resultados esperados de [PC-01](../../../demo/pc-info-automation/test_plan.md#caso-pc-01--confirmar-datos-y-generar-el-pdf). Las regresiones de cancelación y respuesta del bucle se cubren en la [tarea 5](#tarea-5--worker-integración-syncasync-y-recuperación). Mantener un único escenario sync en la automatización de ejemplo.
 - [ ] Verificar una página creada antes y otra después de importar la extensión.
 
-## Tarea 7 — distribución, documentación y medidas
+## Tarea 7 — compatibilidad, rendimiento y revisión final
 
-**Archivos:** `lib/scripts/`, `lib/README.md`, README principal y documentación técnica.
+**Archivos.** `lib/pyproject.toml`, `lib/README.md`, README principal y documentación técnica.
 
-- [x] Confirmar `0.1.0` en PyPI. La compilación continúa con Maturin y el script de publicación usa `twine upload`. La migración del script quedó posterior a la publicación de `0.1.0`.
 - [ ] Completar la matriz del wheel fuera del repositorio. **Cierre.** Construcción e importación verificadas con CPython 3.10 convencional x64 y comprobación con Playwright 1.65.2. Usar como referencia CPython 3.14 y Playwright 1.63.0 ya verificados. Ajustar los rangos declarados a la evidencia.
-- [ ] Medir en release inicialización, búsquedas, lecturas, ediciones y acciones. **Cierre.** Registrar p50/p95, número de muestras, condiciones reproducibles y liberación de sesiones, objetos JAB e hilos tras operaciones repetidas. Medir por separado ClickOnce, JVM, motor y PDF.
-- [ ] Revisar el contrato y preparar la entrega. **Cierre.** Instalación, API sync/async, configuración del runtime, tipado, errores y límites de sesión coinciden con las comprobaciones registradas. Hacer una revisión independiente de ABI, propiedad de recursos, colisiones y efectos tardíos y repetir las comprobaciones afectadas.
+- [ ] Medir inicialización, búsquedas, lecturas, ediciones y acciones del motor en release, con el formulario Java ya abierto. **Cierre.** Registrar p50/p95, número de muestras, condiciones reproducibles y liberación de sesiones, objetos JAB e hilos tras operaciones repetidas.
+- [ ] Revisar el contrato público y la documentación. **Cierre.** Instalación, API sync/async, configuración del runtime, tipado, errores y límites de sesión coinciden con las comprobaciones registradas. Hacer una revisión independiente de ABI, propiedad de recursos, colisiones y efectos tardíos y repetir las comprobaciones afectadas.
 
 ## Resultado esperado
 

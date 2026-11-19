@@ -4,8 +4,7 @@ param(
     [int]$Port = 18765,
     [string]$JavaHome = $env:JAVA_HOME,
     [string]$JdkHome = $env:JAVA_HOME,
-    [string]$Python = 'py',
-    [switch]$EnableAccessBridge
+    [string]$Python = 'py'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -37,7 +36,7 @@ Write-Host '[1/3] Preparando las dependencias de Python global...'
 if ($LASTEXITCODE -ne 0) { throw 'No se pudieron instalar las dependencias Python de la demo.' }
 
 Write-Host '[2/3] Compilando Java, el lanzador C# y la publicación ClickOnce...'
-& $buildScript -BaseUrl $baseUrl -JavaHome $JavaHome -JdkHome $JdkHome -EnableAccessBridge:$EnableAccessBridge
+& $buildScript -BaseUrl $baseUrl -JavaHome $JavaHome -JdkHome $JdkHome
 
 Write-Host "[3/3] Arrancando la web en $baseUrl"
 Write-Host 'Abre esta dirección en tu navegador y pulsa Obtener información.'

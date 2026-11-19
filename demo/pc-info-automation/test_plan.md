@@ -4,17 +4,13 @@
 
 Validar el recorrido de extremo a extremo desde el navegador hasta el formulario Java y de vuelta a la web. El resultado esperado es que la fecha, el nombre del equipo y el alias confirmados en el formulario coincidan con los que muestra la web y contiene el PDF.
 
-Se ejecuta un caso funcional de caja negra con datos válidos en un navegador por ejecución. Quedan fuera las entradas inválidas, la cancelación, una matriz de navegadores y la comparación visual del PDF. El caso se basa en el [recorrido de la demo](../README.md#levantar-pc-info).
+Se ejecuta un caso funcional de caja negra con datos válidos en un navegador por ejecución. Quedan fuera las entradas inválidas, la cancelación, una matriz de navegadores y la comparación del diseño del PDF.
 
 ## Criterios de entrada y ejecución
 
-Usa una sesión interactiva de Windows, un navegador compatible con Playwright y las dependencias del [README de la demo](../README.md). Deja `pc-info` levantada con Java Access Bridge habilitado en `http://127.0.0.1:18765`. Acepta la apertura de ClickOnce si el navegador la solicita.
+Usa una sesión interactiva de Windows y un navegador compatible con Playwright y ClickOnce. Deja `pc-info` levantada en `http://127.0.0.1:18765` según las [instrucciones de arranque](../README.md#levantar-pc-info). Acepta la apertura de ClickOnce si el navegador la solicita.
 
-Desde la raíz del repositorio, ejecuta:
-
-```powershell
-py demo/pc-info-automation/run.py
-```
+Ejecuta el mismo caso con la versión publicada o con el wheel local. Usa el wheel local para validar cambios de la librería. [Comandos de ejecución](../README.md#ejecutar-pc-info-automation)
 
 Si la web no está disponible, el runner muestra «El sistema no responde.» y termina antes de abrir el navegador. Registra el caso como **bloqueado por el entorno**.
 
@@ -29,7 +25,9 @@ Datos de prueba: fecha `2026-11-19`, equipo `EQUIPO-CLICKONCE` y alias `Integrac
 | Revisa el resultado en la web. | La página muestra los tres valores ingresados, el mensaje de confirmación y el visor PDF. |
 | Lee el PDF generado. | Su texto contiene los tres valores ingresados. |
 
-**Criterio de salida.** PC-01 se aprueba cuando se cumplen todos los resultados esperados. Si el escenario inicia y falla, registra el paso, los datos, el resultado esperado y el observado, la salida de consola y la versión de la demo y del navegador. Distingue, por ejemplo, un fallo de apertura de ClickOnce de una diferencia en el contenido del PDF.
+**Criterio de salida.** PC-01 se aprueba cuando se cumplen todos los resultados esperados. En la revisión de la demo, abre también la vista previa y comprueba que los tres valores sean legibles.
+
+**Evidencia.** Registra el resultado, el navegador y la versión y origen de la librería (PyPI o local). Si falla, anota el paso, el resultado esperado y el observado, y la salida de consola.
 
 ## Estructura POM
 

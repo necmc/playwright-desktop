@@ -8,7 +8,7 @@
 
 **Especificación.** [Diseño de pc-info](../specs/2026-11-17-demo-clickonce-java-design.md).
 
-**Estado.** La web está implementada y el lanzador y el formulario compilan. Hay comprobaciones parciales de los tres componentes. Falta confirmar la activación desde Edge. El [plan de la librería](2026-11-17-libreria-python-rust.md#tarea-6--recorrido-real-de-la-demo) registra la captura de la ventana, el recorrido automatizado y la revisión del PDF.
+**Estado.** La web está implementada y el lanzador y el formulario compilan. Hay comprobaciones parciales de los tres componentes. La activación desde Edge se valida en la tarea 3 y el flujo completo se valida con PC-01 en la tarea 4.
 
 ## Restricciones globales
 
@@ -60,6 +60,7 @@ Archivos `demo/pc-info/launcher-clickonce/Launcher.cs` y `demo/pc-info/launcher-
 ## Tarea 4 — recorrido y documentación
 
 - [x] Proporcionar `demo/pc-info/start.ps1` para preparar dependencias, compilar los componentes y arrancar Flask con un solo comando. Se verificaron el arranque desde otra carpeta, el puerto configurable, HTTP 200, creación de operaciones, coherencia de la publicación, rechazo de puerto ocupado y parada con Ctrl+C. El arranque predeterminado quedó verificado en `18765`.
-- [x] Centralizar objetivo, contenido, ejecución, configuración y pruebas en `demo/README.md`, único README de las demos.
+- [x] Documentar el arranque y la ejecución de la automatización en `demo/README.md`.
 - [x] Mantener los detalles internos en la documentación técnica y crear `lib/README.md`.
-- [ ] Ejecutar una revisión final independiente de la demo y corregir los hallazgos antes de entregar. Usar la evidencia del [recorrido automatizado](2026-11-17-libreria-python-rust.md#tarea-6--recorrido-real-de-la-demo), incluida la revisión visual del PDF.
+- [ ] Ejecutar PC-01 con el wheel local de `playwright-desktop`. **Cierre.** El flujo completo pasa desde el navegador y los tres valores son legibles en la vista previa del PDF. Registrar el resultado según el [plan de pruebas](../../../demo/pc-info-automation/test_plan.md#caso-pc-01--confirmar-datos-y-generar-el-pdf).
+- [ ] Ejecutar una revisión final independiente de la demo y corregir los hallazgos antes de entregar. Usar la evidencia de PC-01.
