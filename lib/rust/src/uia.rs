@@ -1,9 +1,9 @@
 //! UI Automation objects belong to the MTA worker which created them.
 
 use crate::{
-    backend::{ControlAction, ControlResult, WindowState},
+    engine::{ControlAction, ControlResult},
     error::{Failure, Result},
-    windows,
+    windows::{self, WindowState},
 };
 use ::windows::{
     Win32::{
@@ -79,7 +79,7 @@ impl Client {
     }
 
     pub(crate) fn perform(
-        &self, target: &Target, action: ControlAction<'_>, control: Selector<'_>,
+        &self, target: &Target, action: ControlAction, control: Selector<'_>,
         scope: Option<Selector<'_>>, check: &dyn Fn() -> Result<()>,
     ) -> Result<Option<ControlResult>> {
         if !matches!(action, ControlAction::Click) || !matches!(control.role, "button" | "link" | "menuitem") {

@@ -1,32 +1,12 @@
 //! Windows desktop access for the Java Access Bridge backend.
 
-use crate::{error::{Failure, Result}, jab::{Object, loader::{Library, dll_path}}, windows};
-use std::{collections::HashSet, path::{Path, PathBuf}, rc::Rc};
-
-pub(crate) struct SessionOptions {
-    java_home: Option<String>,
-    pub(crate) automatic: bool,
-    pub(crate) explicit_java_home: bool,
-}
-
-impl SessionOptions {
-    pub(crate) fn java(java_home: &str) -> Result<Self> {
-        if java_home.is_empty() || java_home.contains('\0') || !Path::new(java_home).is_absolute() {
-            return Err(Failure::new("CONFIGURATION", "java_home must be an absolute runtime directory."));
-        }
-        Ok(Self { java_home: Some(java_home.into()), automatic: false, explicit_java_home: true })
-    }
-
-    pub(crate) fn automatic(java_home: Option<&str>, explicit: bool) -> Result<Self> {
-        let mut options = match java_home {
-            Some(java_home) => Self::java(java_home)?,
-            None => Self { java_home: None, automatic: true, explicit_java_home: false },
-        };
-        options.automatic = true;
-        options.explicit_java_home = explicit && java_home.is_some();
-        Ok(options)
-    }
-}
+use crate::{
+    engine::{ControlAction, ControlResult, SessionOptions},
+    error::{Failure, Result},
+    jab::{Object, loader::{Library, dll_path}},
+    windows::{self, WindowState},
+};
+use std::{collections::HashSet, path::PathBuf, rc::Rc};
 
 struct LoadedBridge {
     path: PathBuf,
@@ -39,40 +19,9 @@ pub(crate) struct Backend {
     validated_sessions: HashSet<u64>,
 }
 
-pub(crate) const TIMEOUT_MESSAGE: &str =
-    "No unique desktop window or control became ready before the deadline. Check its title, PID and accessibility provider.";
-
-#[derive(Clone, Copy, Eq, Hash, PartialEq)]
-pub(crate) struct WindowKey(isize, u32);
-
-pub(crate) struct WindowCandidate(pub(crate) windows::Window);
-
-impl WindowCandidate {
-    pub(crate) fn key(&self) -> WindowKey {
-        WindowKey(self.0.hwnd, self.0.pid)
-    }
-}
-
 pub(crate) struct Target {
     window: windows::Window,
     root: Object,
-}
-
-pub(crate) enum WindowState {
-    Ready,
-    Closed,
-    Inaccessible(Failure),
-    Replaced(Failure),
-}
-
-pub(crate) enum ControlAction<'a> {
-    ReadText,
-    Fill(&'a str),
-    Click,
-}
-
-pub(crate) struct ControlResult {
-    pub(crate) text: Option<String>,
 }
 
 impl Backend {
@@ -121,18 +70,9 @@ impl Backend {
         self.validated_sessions.retain(|session| live.contains(session));
     }
 
-    pub(crate) fn candidates(title: &str, pid: Option<u32>) -> Result<Vec<WindowCandidate>> {
-        if (title.is_empty() && pid.is_none()) || title.contains('\0') {
-            return Err(Failure::new("CONFIGURATION", "An exact window title or PID is required."));
-        }
-        Ok(windows::list()?.into_iter().filter(|window| matches_window(window, title, pid))
-            .map(WindowCandidate).collect())
-    }
-
-    pub(crate) fn attach(&self, candidate: WindowCandidate) -> Result<Option<Target>> {
+    pub(crate) fn attach(&self, window: windows::Window) -> Result<Option<Target>> {
         let bridge = self.bridge.as_ref()
             .ok_or_else(|| Failure::new("BRIDGE", "The Java bridge is not initialized."))?;
-        let window = candidate.0;
         Ok(Object::root(&bridge.library, &window).map(|root| Target { window, root }))
     }
 
@@ -150,11 +90,6 @@ impl Backend {
             validated_sessions: sessions.into_iter().collect(),
         }
     }
-
-    #[cfg(test)]
-    pub(crate) fn attach_test_window(&self, window: windows::Window) -> Result<Option<Target>> {
-        self.attach(WindowCandidate(window))
-    }
 }
 
 impl Target {
@@ -170,7 +105,7 @@ impl Target {
     }
 
     pub(crate) fn perform(
-        &self, action: ControlAction<'_>, role: &str, name: &str, check: &dyn Fn() -> Result<()>,
+        &self, action: ControlAction, role: &str, name: &str, check: &dyn Fn() -> Result<()>,
     ) -> Result<Option<ControlResult>> {
         if !matches!(role, "textbox" | "button") || name.is_empty() {
             return Err(Failure::new("CONFIGURATION", "A supported role and exact accessible name are required."));
@@ -183,7 +118,7 @@ impl Target {
         check()?;
         let text = match (action, role) {
             (ControlAction::ReadText, "textbox") => Some(control.text()?),
-            (ControlAction::Fill(text), "textbox") => { control.fill(text, check)?; None }
+            (ControlAction::Fill(text), "textbox") => { control.fill(&text, check)?; None }
             (ControlAction::Click, "button") => { control.click(check)?; None }
             _ => return Err(Failure::new("CONFIGURATION", "The action does not support this role.")),
         };
@@ -191,10 +126,9 @@ impl Target {
     }
 }
 
-fn matches_window(window: &windows::Window, title: &str, pid: Option<u32>) -> bool {
-    (title.is_empty() || window.title == title) && pid.is_none_or(|pid| window.pid == pid)
-}
-
 fn different_bridge() -> Failure {
     Failure::new("CONFIGURATION", "This process already loaded a different Java bridge. Start another Python process to change it.")
 }
+
+#[cfg(test)]
+mod tests;

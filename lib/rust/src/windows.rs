@@ -18,6 +18,13 @@ pub struct Window {
     pub title: String,
 }
 
+pub(crate) enum WindowState {
+    Ready,
+    Closed,
+    Inaccessible(Failure),
+    Replaced(Failure),
+}
+
 pub fn hwnd(value: isize) -> HWND { HWND(value as *mut _) }
 
 pub fn valid(window: &Window) -> bool {

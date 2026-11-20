@@ -1,8 +1,12 @@
-use super::{Arguments, RequestState, WindowOperation};
+use super::{
+    RequestState,
+    platform::{CapturePreparation, ControlAction, ControlQuery, ControlResult, Platform, ProviderSelection},
+};
 use crate::{
-    backend::{Backend, ControlAction, ControlResult, Target, WindowCandidate, WindowState},
+    backend::{Backend, Target},
     error::{Failure, Result},
-    uia, windows,
+    uia,
+    windows::{self, WindowState},
 };
 use std::{
     collections::{HashMap, HashSet},
@@ -12,7 +16,7 @@ use std::{
 };
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum WindowProvider {
+pub(super) enum WindowsProvider {
     JavaAccessBridge,
     UiAutomation,
 }
@@ -108,17 +112,12 @@ struct Uia {
 }
 
 #[derive(Default)]
-pub(super) struct Providers {
+pub(super) struct WindowsPlatform {
     java: Option<Lane<Java>>,
     uia: Option<Lane<Uia>>,
 }
 
-impl Providers {
-    pub(super) fn check_health(&self) {
-        if let Some(lane) = &self.java { let _ = lane.check_health(); }
-        if let Some(lane) = &self.uia { let _ = lane.check_health(); }
-    }
-
+impl WindowsPlatform {
     fn java(&mut self) -> Result<&Lane<Java>> {
         if self.java.is_none() {
             self.java = Some(Lane::start("playwright-desktop-jab", Java::default, |state| state.backend.poll())?);
@@ -133,54 +132,101 @@ impl Providers {
         Ok(self.uia.as_ref().unwrap())
     }
 
-    pub(super) fn validate_java(&mut self, request: Arc<RequestState>) -> Result<Receiver<Result<()>>> {
-        self.java()?.submit(request, |state, request| {
-            state.backend.prepare_session(request.session.id, &request.session.options, &|| request.check())
-        })
-    }
-
-    pub(super) fn validate_loaded_java(&self, request: Arc<RequestState>) -> Option<Receiver<Result<()>>> {
-        self.java.as_ref()?.submit(request, |state, request| {
-            state.backend.validate_loaded_bridge(&request.session.options)
-        }).ok()
-    }
-
-    pub(super) fn check_java_window(
+    fn check_java_window(
         &mut self, request: Arc<RequestState>, window: windows::Window,
-    ) -> Result<Receiver<Result<bool>>> {
+    ) -> Result<Receiver<Result<WindowsProvider>>> {
         self.java()?.submit(request, move |state, request| {
             let prepared = state.backend.prepare_session(request.session.id, &request.session.options, &|| request.check());
             request.check()?;
-            let recognized = state.backend.recognizes(&window);
-            if recognized { prepared?; }
-            Ok(recognized)
+            if state.backend.recognizes(&window) {
+                prepared?;
+                Ok(WindowsProvider::JavaAccessBridge)
+            } else {
+                Ok(WindowsProvider::UiAutomation)
+            }
         })
     }
+}
 
-    pub(super) fn act(
-        &mut self, provider: WindowProvider, request: Arc<RequestState>, id: u64, window: windows::Window,
-        operation: WindowOperation, args: Arguments,
+impl Platform for WindowsPlatform {
+    type Window = windows::Window;
+    type WindowKey = (isize, u32);
+    type Provider = WindowsProvider;
+
+    fn candidates(&self, title: &str, pid: Option<u32>) -> Result<Vec<Self::Window>> {
+        if (title.is_empty() && pid.is_none()) || title.contains('\0') {
+            return Err(Failure::new("CONFIGURATION", "An exact window title or PID is required."));
+        }
+        Ok(windows::list()?.into_iter()
+            .filter(|window| (title.is_empty() || window.title == title) && pid.is_none_or(|pid| window.pid == pid))
+            .collect())
+    }
+
+    fn window_key(&self, window: &Self::Window) -> Self::WindowKey {
+        (window.hwnd, window.pid)
+    }
+
+    fn is_window_alive(&self, window: &Self::Window) -> bool {
+        windows::valid(window)
+    }
+
+    fn prepare_capture(&mut self, request: Arc<RequestState>) -> Result<Option<CapturePreparation>> {
+        if !request.session.options.automatic {
+            let result = self.java()?.submit(request, |state, request| {
+                state.backend.prepare_session(request.session.id, &request.session.options, &|| request.check())
+            })?;
+            return Ok(Some(CapturePreparation { result, until: None }));
+        }
+        if !request.session.options.explicit_java_home {
+            return Ok(None);
+        }
+        let until = Some(java_check_deadline(&request));
+        let preparation = self.java.as_ref().and_then(|lane| {
+            lane.submit(request, |state, request| {
+                state.backend.validate_loaded_bridge(&request.session.options)
+            }).ok()
+        });
+        Ok(preparation.map(|result| CapturePreparation { result, until }))
+    }
+
+    fn resolve_provider(
+        &mut self, request: Arc<RequestState>, window: Self::Window,
+    ) -> ProviderSelection<Self::Provider> {
+        if !request.session.options.automatic || windows::is_java_process(&window) {
+            return ProviderSelection::Ready(WindowsProvider::JavaAccessBridge);
+        }
+        let until = java_check_deadline(&request);
+        let fallback = WindowsProvider::UiAutomation;
+        match self.check_java_window(request, window) {
+            Ok(result) => ProviderSelection::Pending { result, until, fallback },
+            Err(_) => ProviderSelection::Ready(fallback),
+        }
+    }
+
+    fn act(
+        &mut self, provider: Self::Provider, request: Arc<RequestState>, id: u64, window: Self::Window,
+        action: ControlAction, query: ControlQuery,
     ) -> Result<Receiver<Result<Option<ControlResult>>>> {
         match provider {
-            WindowProvider::JavaAccessBridge => self.java()?.submit(request, move |state, request| {
+            WindowsProvider::JavaAccessBridge => self.java()?.submit(request, move |state, request| {
                 let check = || request.check();
                 state.backend.prepare_session(request.session.id, &request.session.options, &check)?;
-                if !args.scope_role.is_empty() {
+                if !query.scope_role.is_empty() {
                     return Err(Failure::new("ACTION", "Scoped control lookup requires UI Automation."));
                 }
                 let target = if let Some(target) = state.targets.get(&id) {
                     target
                 } else {
                     check()?;
-                    let Some(target) = state.backend.attach(WindowCandidate(window))? else {
+                    let Some(target) = state.backend.attach(window)? else {
                         return Ok(None);
                     };
                     state.targets.entry(id).or_insert(target)
                 };
                 ensure_ready(target.state())?;
-                target.perform(action(operation, &args), &args.role, &args.name, &check)
+                target.perform(action, &query.role, &query.name, &check)
             }),
-            WindowProvider::UiAutomation => self.uia()?.submit(request, move |state, request| {
+            WindowsProvider::UiAutomation => self.uia()?.submit(request, move |state, request| {
                 let check = || request.check();
                 if state.client.is_none() {
                     state.client = Some(uia::Client::new()?);
@@ -195,31 +241,40 @@ impl Providers {
                     state.targets.entry(id).or_insert(target)
                 };
                 client.perform(
-                    target, action(operation, &args), uia::Selector { role: &args.role, name: &args.name },
-                    (!args.scope_role.is_empty()).then_some(uia::Selector { role: &args.scope_role, name: &args.scope_name }),
+                    target, action, uia::Selector { role: &query.role, name: &query.name },
+                    (!query.scope_role.is_empty()).then_some(uia::Selector { role: &query.scope_role, name: &query.scope_name }),
                     &check,
                 )
             }),
         }
     }
 
-    pub(super) fn release(&self, id: u64, provider: Option<WindowProvider>) {
+    fn release(&self, id: u64, provider: Self::Provider) {
         match provider {
-            Some(WindowProvider::JavaAccessBridge) => {
+            WindowsProvider::JavaAccessBridge => {
                 if let Some(lane) = &self.java { lane.cleanup(move |state| { state.targets.remove(&id); }); }
             }
-            Some(WindowProvider::UiAutomation) => {
+            WindowsProvider::UiAutomation => {
                 if let Some(lane) = &self.uia { lane.cleanup(move |state| { state.targets.remove(&id); }); }
             }
-            None => {},
         }
     }
 
-    pub(super) fn retain_sessions(&self, sessions: HashSet<u64>) {
+    fn retain_sessions(&self, sessions: HashSet<u64>) {
         if let Some(lane) = &self.java {
             lane.cleanup(move |state| state.backend.retain_sessions(&sessions));
         }
     }
+
+    fn check_health(&self) {
+        if let Some(lane) = &self.java { let _ = lane.check_health(); }
+        if let Some(lane) = &self.uia { let _ = lane.check_health(); }
+    }
+}
+
+fn java_check_deadline(request: &RequestState) -> Instant {
+    let now = Instant::now();
+    now + (request.deadline.saturating_duration_since(now) / 2).min(Duration::from_millis(500))
 }
 
 fn ensure_ready(state: WindowState) -> Result<()> {
@@ -230,19 +285,10 @@ fn ensure_ready(state: WindowState) -> Result<()> {
     }
 }
 
-fn action(operation: WindowOperation, args: &Arguments) -> ControlAction<'_> {
-    match operation {
-        WindowOperation::ReadText => ControlAction::ReadText,
-        WindowOperation::Fill => ControlAction::Fill(&args.text),
-        WindowOperation::Click => ControlAction::Click,
-        WindowOperation::WaitClosed => unreachable!("window closure is resolved by the coordinator"),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{backend::SessionOptions, engine::SessionState};
+    use crate::engine::{SessionOptions, SessionState};
     use std::sync::atomic::AtomicBool;
 
     fn request(timeout: Duration) -> Arc<RequestState> {

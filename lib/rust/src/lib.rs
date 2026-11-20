@@ -1,10 +1,14 @@
 use pyo3::prelude::*;
 
+#[cfg(windows)]
 mod backend;
 mod engine;
 mod error;
+#[cfg(windows)]
 mod jab;
+#[cfg(windows)]
 mod uia;
+#[cfg(windows)]
 mod windows;
 
 pyo3::create_exception!(_native, NativeError, pyo3::exceptions::PyException);

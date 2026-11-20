@@ -1,15 +1,42 @@
-use crate::{
-    backend::{Backend, ControlResult, SessionOptions, TIMEOUT_MESSAGE, WindowKey},
-    error::{Failure, Result},
-    windows,
-};
-use providers::{Providers, WindowProvider};
+use crate::error::{Failure, Result};
+use platform::{CapturePreparation, ControlQuery, Platform, ProviderSelection};
+pub(crate) use platform::{ControlAction, ControlResult};
 use pyo3::prelude::*;
-use std::{collections::{HashMap, HashSet, VecDeque},
+use std::{collections::{HashMap, HashSet, VecDeque}, path::Path,
     sync::{Arc, Condvar, Mutex, OnceLock, atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering}, mpsc::{self, Sender, Receiver}},
     time::{Duration, Instant}};
 
 struct SessionState { id: u64, closed: AtomicBool, options: SessionOptions }
+
+/// Session settings accepted by the Python binding. Only the Windows adapter
+/// interprets the Java settings when choosing or preparing a provider.
+pub(crate) struct SessionOptions {
+    pub(crate) java_home: Option<String>,
+    automatic: bool,
+    explicit_java_home: bool,
+}
+
+impl SessionOptions {
+    fn java(java_home: &str) -> Result<Self> {
+        if java_home.is_empty() || java_home.contains('\0') || !Path::new(java_home).is_absolute() {
+            return Err(Failure::new("CONFIGURATION", "java_home must be an absolute runtime directory."));
+        }
+        Ok(Self { java_home: Some(java_home.into()), automatic: false, explicit_java_home: true })
+    }
+
+    fn automatic(java_home: Option<&str>, explicit: bool) -> Result<Self> {
+        let mut options = match java_home {
+            Some(java_home) => Self::java(java_home)?,
+            None => Self { java_home: None, automatic: true, explicit_java_home: false },
+        };
+        options.automatic = true;
+        options.explicit_java_home = explicit && java_home.is_some();
+        Ok(options)
+    }
+}
+
+const TIMEOUT_MESSAGE: &str =
+    "No unique desktop window or control became ready before the deadline. Check its title, PID and accessibility provider.";
 
 struct RequestState {
     session: Arc<SessionState>,
@@ -37,7 +64,7 @@ impl RequestState {
 }
 
 struct Shared {
-    sender: Sender<Command>,
+    sender: Sender<QueuedCommand>,
     sessions: Mutex<HashMap<u64, Arc<SessionState>>>,
     captures_cancelled: Mutex<HashSet<(u64, u64)>>,
     next: AtomicU64,
@@ -67,11 +94,8 @@ struct Arguments {
     capture_id: u64,
     title: String,
     pid: Option<u32>,
-    role: String,
-    name: String,
     text: String,
-    scope_role: String,
-    scope_name: String,
+    control: ControlQuery,
 }
 
 #[pyclass]
@@ -110,17 +134,27 @@ enum WindowOperation {
     WaitClosed,
 }
 
-struct Command {
+struct Command<P> {
     request: Arc<RequestState>,
     operation: Operation,
     arguments: Arguments,
     reply: Sender<Result<Reply>>,
-    pending: Option<PendingCall>,
+    pending: P,
 }
 
-enum PendingCall {
-    ValidateJava { result: Receiver<Result<()>>, until: Option<Instant> },
-    ResolveWindowProvider { id: u64, java_recognition: Receiver<Result<bool>>, until: Instant },
+type QueuedCommand = Command<()>;
+type ActiveCommand<P> = Command<Option<PendingCall<P>>>;
+
+impl QueuedCommand {
+    fn activate<P>(self) -> ActiveCommand<P> {
+        let Self { request, operation, arguments, reply, pending: () } = self;
+        Command { request, operation, arguments, reply, pending: None }
+    }
+}
+
+enum PendingCall<P> {
+    PrepareCapture(CapturePreparation),
+    ResolveProvider { id: u64, result: Receiver<Result<P>>, until: Instant, fallback: P },
     Action { id: u64, result: Receiver<Result<Option<ControlResult>>> },
 }
 
@@ -147,14 +181,7 @@ impl Engine {
         if global.is_none() {
             let (sender, receiver) = mpsc::channel();
             let shared = Arc::new(Shared::new(sender));
-            let owner = shared.clone();
-            std::thread::Builder::new().name("playwright-desktop-windows".into())
-                .spawn(move || {
-                    let state = owner.clone();
-                    if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| Worker::new(owner).run(receiver))).is_err() {
-                        state.poisoned.store(true, Ordering::Release);
-                    }
-                }).map_err(|e| as_python(Failure::new("BRIDGE", format!("Cannot start the native worker: {e}"))))?;
+            platform::start_host_worker(shared.clone(), receiver).map_err(as_python)?;
             *global = Some(shared);
         }
         Ok(Self { shared: global.as_ref().unwrap().clone() })
@@ -197,9 +224,11 @@ impl Engine {
         let (sender, receiver) = mpsc::channel();
         let state = request.state.clone();
         let command = Command { request: state.clone(), operation,
-            arguments: Arguments { window_id, capture_id, title: title.into(), pid, role: role.into(),
-                name: name.into(), text: text.into(), scope_role: scope_role.into(), scope_name: scope_name.into() },
-            reply: sender, pending: None };
+            arguments: Arguments {
+                window_id, capture_id, title: title.into(), pid, text: text.into(),
+                control: ControlQuery { role: role.into(), name: name.into(), scope_role: scope_role.into(), scope_name: scope_name.into() },
+            },
+            reply: sender, pending: () };
         if self.shared.sender.send(command).is_err() {
             self.shared.queued.fetch_sub(1, Ordering::AcqRel);
             self.shared.poisoned.store(true, Ordering::Release);
@@ -258,7 +287,7 @@ impl Shared {
         }
     }
 
-    fn new(sender: Sender<Command>) -> Self {
+    fn new(sender: Sender<QueuedCommand>) -> Self {
         Self {
             sender,
             sessions: Mutex::new(HashMap::new()),
@@ -304,52 +333,52 @@ impl Shared {
     }
 }
 
-struct Capture {
+struct Capture<K> {
     session: u64,
     title: String,
     pid: Option<u32>,
-    before: HashSet<WindowKey>,
+    before: HashSet<K>,
     request: Arc<RequestState>,
 }
 
-struct BoundWindow {
+struct BoundWindow<W, P> {
     session: u64,
-    window: windows::Window,
+    window: W,
     capture: Option<u64>,
-    provider: Option<WindowProvider>,
+    provider: Option<P>,
 }
 
-struct Worker {
+struct Worker<P: Platform> {
     shared: Arc<Shared>,
-    providers: Providers,
-    captures: HashMap<u64, Capture>,
-    windows: HashMap<u64, BoundWindow>,
+    platform: P,
+    captures: HashMap<u64, Capture<P::WindowKey>>,
+    windows: HashMap<u64, BoundWindow<P::Window, P::Provider>>,
     closed: HashMap<u64, u64>,
     live: HashSet<u64>,
 }
 
-impl Worker {
-    fn new(shared: Arc<Shared>) -> Self {
+impl<P: Platform> Worker<P> {
+    fn new(shared: Arc<Shared>, platform: P) -> Self {
         Self {
-            shared, providers: Providers::default(), captures: HashMap::new(),
+            shared, platform, captures: HashMap::new(),
             windows: HashMap::new(), closed: HashMap::new(), live: HashSet::new(),
         }
     }
 
-    fn run(mut self, receiver: Receiver<Command>) {
+    fn run(mut self, receiver: Receiver<QueuedCommand>) {
         let shared = self.shared.clone();
         let mut pending = VecDeque::new();
         loop {
             if let Ok(command) = receiver.recv_timeout(Duration::from_millis(if pending.is_empty() { 15 } else { 5 })) {
-                pending.push_back(command);
+                pending.push_back(command.activate());
             }
-            pending.extend(receiver.try_iter().take(64));
+            pending.extend(receiver.try_iter().take(64).map(QueuedCommand::activate));
             let _ = shared.run_native(Instant::now() + Duration::from_secs(10), || self.cleanup());
             self.process_pending(&mut pending);
         }
     }
 
-    fn process_pending(&mut self, pending: &mut VecDeque<Command>) {
+    fn process_pending(&mut self, pending: &mut VecDeque<ActiveCommand<P::Provider>>) {
         let shared = self.shared.clone();
         for _ in 0..pending.len() {
             let mut command = pending.pop_front().unwrap();
@@ -370,7 +399,7 @@ impl Worker {
         }
     }
 
-    fn complete(&mut self, command: Command, result: Result<Reply>) {
+    fn complete(&mut self, command: ActiveCommand<P::Provider>, result: Result<Reply>) {
         if result.is_err() && matches!(command.operation, Operation::CompleteCapture) {
             self.cancel(command.request.session.id, command.arguments.capture_id);
         }
@@ -379,7 +408,7 @@ impl Worker {
     }
 
     fn cleanup(&mut self) {
-        self.providers.check_health();
+        self.platform.check_health();
         let live: HashSet<u64> = self.shared.sessions.lock().unwrap().keys().copied().collect();
         let cancellations = std::mem::take(&mut *self.shared.captures_cancelled.lock().unwrap());
         for (session, capture) in cancellations { self.cancel(session, capture); }
@@ -388,13 +417,13 @@ impl Worker {
         self.closed.retain(|_, session| live.contains(session));
 
         let removed: Vec<u64> = self.windows.iter()
-            .filter(|(_, item)| !live.contains(&item.session) || !windows::valid(&item.window))
+            .filter(|(_, item)| !live.contains(&item.session) || !self.platform.is_window_alive(&item.window))
             .map(|(id, _)| *id).collect();
         for id in removed {
             self.release_window(id, &live);
         }
         if live != self.live {
-            self.providers.retain_sessions(live.clone());
+            self.platform.retain_sessions(live.clone());
             self.live = live;
         }
     }
@@ -424,53 +453,41 @@ impl Worker {
     }
 
     fn discover(
-        &mut self, request: &RequestState, title: &str, pid: Option<u32>, capture: Option<(u64, &HashSet<WindowKey>)>,
+        &mut self, request: &RequestState, title: &str, pid: Option<u32>, capture: Option<(u64, &HashSet<P::WindowKey>)>,
     ) -> Result<Option<u64>> {
         let session = request.session.id;
         self.require_owner(session)?;
-        let mut candidates = Backend::candidates(title, pid)?.into_iter()
-            .filter(|window| !capture.is_some_and(|(_, before)| before.contains(&window.key())));
+        let mut candidates = self.platform.candidates(title, pid)?.into_iter()
+            .filter(|window| !capture.is_some_and(|(_, before)| before.contains(&self.platform.window_key(window))));
         let Some(candidate) = candidates.next() else { return Ok(None); };
         if candidates.next().is_some() {
             let filter = if title.is_empty() { "an exact title" } else { "a PID" };
             return Err(Failure::new("AMBIGUOUS", format!("More than one window matches. Add {filter} to narrow the search.")));
         }
         request.check()?;
-        if let Some((&id, _)) = self.windows.iter().find(|(_, item)| {
-            item.window.hwnd == candidate.0.hwnd && item.window.pid == candidate.0.pid
-        }) {
+        let key = self.platform.window_key(&candidate);
+        if let Some((&id, _)) = self.windows.iter().find(|(_, item)| self.platform.window_key(&item.window) == key) {
             return Ok(Some(id));
         }
         let id = self.shared.next.fetch_add(1, Ordering::Relaxed);
         self.windows.insert(id, BoundWindow {
-            session, window: candidate.0, capture: capture.map(|(id, _)| id), provider: None,
+            session, window: candidate, capture: capture.map(|(id, _)| id), provider: None,
         });
         Ok(Some(id))
     }
 
-    fn step(&mut self, command: &mut Command) -> Result<Option<Reply>> {
+    fn step(&mut self, command: &mut ActiveCommand<P::Provider>) -> Result<Option<Reply>> {
         command.request.check()?;
         self.discard_abandoned_captures();
         if let Some(pending) = command.pending.take() {
             return self.resume(command, pending);
         }
         match command.operation {
-            Operation::PrepareCapture if !command.request.session.options.automatic => {
-                self.require_owner(command.request.session.id)?;
-                command.pending = Some(PendingCall::ValidateJava {
-                    result: self.providers.validate_java(command.request.clone())?, until: None,
-                });
-                Ok(None)
-            }
             Operation::PrepareCapture => {
-                if command.request.session.options.explicit_java_home {
-                    self.require_owner(command.request.session.id)?;
-                    if let Some(result) = self.providers.validate_loaded_java(command.request.clone()) {
-                        command.pending = Some(PendingCall::ValidateJava {
-                            result, until: Some(java_check_deadline(&command.request)),
-                        });
-                        return Ok(None);
-                    }
+                self.require_owner(command.request.session.id)?;
+                if let Some(preparation) = self.platform.prepare_capture(command.request.clone())? {
+                    command.pending = Some(PendingCall::PrepareCapture(preparation));
+                    return Ok(None);
                 }
                 self.prepare_capture(&command.request, &command.arguments)
             }
@@ -479,29 +496,27 @@ impl Worker {
         }
     }
 
-    fn resume(&mut self, command: &mut Command, pending: PendingCall) -> Result<Option<Reply>> {
+    fn resume(&mut self, command: &mut ActiveCommand<P::Provider>, pending: PendingCall<P::Provider>) -> Result<Option<Reply>> {
         match pending {
-            PendingCall::ValidateJava { result, until } => {
-                match receive(&result) {
+            PendingCall::PrepareCapture(preparation) => {
+                match receive(&preparation.result) {
                     Ok(Some(response)) => response?,
-                    Ok(None) if until.is_none_or(|deadline| Instant::now() < deadline) => {
-                        command.pending = Some(PendingCall::ValidateJava { result, until });
+                    Ok(None) if preparation.until.is_none_or(|deadline| Instant::now() < deadline) => {
+                        command.pending = Some(PendingCall::PrepareCapture(preparation));
                         return Ok(None);
                     }
-                    Err(error) if until.is_none() => return Err(error),
+                    Err(error) if preparation.until.is_none() => return Err(error),
                     _ => {},
                 }
                 self.prepare_capture(&command.request, &command.arguments)
             }
-            PendingCall::ResolveWindowProvider { id, java_recognition, until } => {
-                let provider = match receive(&java_recognition) {
-                    Ok(Some(response)) => {
-                        if response? { WindowProvider::JavaAccessBridge } else { WindowProvider::UiAutomation }
-                    }
-                    Err(_) => WindowProvider::UiAutomation,
-                    Ok(None) if Instant::now() >= until => WindowProvider::UiAutomation,
+            PendingCall::ResolveProvider { id, result, until, fallback } => {
+                let provider = match receive(&result) {
+                    Ok(Some(response)) => response?,
+                    Err(_) => fallback,
+                    Ok(None) if Instant::now() >= until => fallback,
                     Ok(None) => {
-                        command.pending = Some(PendingCall::ResolveWindowProvider { id, java_recognition, until });
+                        command.pending = Some(PendingCall::ResolveProvider { id, result, until, fallback });
                         return Ok(None);
                     }
                 };
@@ -528,7 +543,8 @@ impl Worker {
     fn prepare_capture(&mut self, request: &Arc<RequestState>, args: &Arguments) -> Result<Option<Reply>> {
         let session = request.session.id;
         self.require_owner(session)?;
-        let before = Backend::candidates(&args.title, args.pid)?.into_iter().map(|window| window.key()).collect();
+        let before = self.platform.candidates(&args.title, args.pid)?.iter()
+            .map(|window| self.platform.window_key(window)).collect();
         request.check()?;
         let id = self.shared.next.fetch_add(1, Ordering::Relaxed);
         self.captures.insert(id, Capture {
@@ -557,7 +573,7 @@ impl Worker {
         self.discover(request, &args.title, args.pid, None)
     }
 
-    fn operate_window(&mut self, command: &mut Command, operation: WindowOperation) -> Result<Option<Reply>> {
+    fn operate_window(&mut self, command: &mut ActiveCommand<P::Provider>, operation: WindowOperation) -> Result<Option<Reply>> {
         let request = &command.request;
         let Some(id) = self.resolve_window(request, &command.arguments)? else { return Ok(None); };
         let session = request.session.id;
@@ -566,7 +582,7 @@ impl Worker {
             return Ok(Some(Reply { handle: id, text: None }));
         }
         let item = self.window(id, session)?;
-        if !windows::valid(&item.window) {
+        if !self.platform.is_window_alive(&item.window) {
             self.invalidate_window(id);
             if waiting_for_close { return Ok(Some(Reply { handle: id, text: None })); }
             return Err(Failure::new("STALE", "The native window no longer exists."));
@@ -577,40 +593,40 @@ impl Worker {
         if let Some(provider) = item.provider {
             return self.dispatch(command, id, provider);
         }
-        self.resolve_window_provider(command, id, item.window.clone())
-    }
-
-    fn resolve_window_provider(&mut self, command: &mut Command, id: u64, window: windows::Window) -> Result<Option<Reply>> {
-        let request = &command.request;
-        if !request.session.options.automatic || windows::is_java_process(&window) {
-            return self.dispatch(command, id, WindowProvider::JavaAccessBridge);
-        }
-        let until = java_check_deadline(request);
-        match self.providers.check_java_window(request.clone(), window) {
-            Ok(java_recognition) => {
-                command.pending = Some(PendingCall::ResolveWindowProvider { id, java_recognition, until });
+        let window = item.window.clone();
+        match self.platform.resolve_provider(request.clone(), window) {
+            ProviderSelection::Ready(provider) => self.dispatch(command, id, provider),
+            ProviderSelection::Pending { result, until, fallback } => {
+                command.pending = Some(PendingCall::ResolveProvider { id, result, until, fallback });
                 Ok(None)
             }
-            Err(_) => self.dispatch(command, id, WindowProvider::UiAutomation),
         }
     }
 
-    fn dispatch(&mut self, command: &mut Command, id: u64, provider: WindowProvider) -> Result<Option<Reply>> {
+    fn dispatch(&mut self, command: &mut ActiveCommand<P::Provider>, id: u64, provider: P::Provider) -> Result<Option<Reply>> {
         let request = &command.request;
         request.check()?;
         self.window(id, request.session.id)?;
         let item = self.windows.get_mut(&id).unwrap();
         let provider = *item.provider.get_or_insert(provider);
-        let Operation::Window(operation) = command.operation else { unreachable!() };
-        let result = self.providers.act(provider, request.clone(), id, item.window.clone(), operation, command.arguments.clone())?;
-        if operation == WindowOperation::Click {
+        let action = match command.operation {
+            Operation::Window(WindowOperation::ReadText) => ControlAction::ReadText,
+            Operation::Window(WindowOperation::Fill) => ControlAction::Fill(command.arguments.text.clone()),
+            Operation::Window(WindowOperation::Click) => ControlAction::Click,
+            _ => unreachable!("only control actions are dispatched to the accessibility provider"),
+        };
+        let is_click = matches!(action, ControlAction::Click);
+        let result = self.platform.act(
+            provider, request.clone(), id, item.window.clone(), action, command.arguments.control.clone(),
+        )?;
+        if is_click {
             request.action_pending.store(true, Ordering::Release);
         }
         command.pending = Some(PendingCall::Action { id, result });
         Ok(None)
     }
 
-    fn window(&self, id: u64, session: u64) -> Result<&BoundWindow> {
+    fn window(&self, id: u64, session: u64) -> Result<&BoundWindow<P::Window, P::Provider>> {
         self.windows.get(&id).filter(|window| window.session == session)
             .ok_or_else(|| Failure::new("STALE", "This native window is closed or belongs to another session."))
     }
@@ -618,14 +634,20 @@ impl Worker {
     fn invalidate_window(&mut self, id: u64) {
         if let Some(item) = self.windows.remove(&id) {
             self.closed.insert(id, item.session);
-            self.providers.release(id, item.provider);
+            self.release_provider(id, item.provider);
         }
     }
 
     fn release_window(&mut self, id: u64, live: &HashSet<u64>) {
         if let Some(item) = self.windows.remove(&id) {
             if live.contains(&item.session) { self.closed.insert(id, item.session); }
-            self.providers.release(id, item.provider);
+            self.release_provider(id, item.provider);
+        }
+    }
+
+    fn release_provider(&self, id: u64, provider: Option<P::Provider>) {
+        if let Some(provider) = provider {
+            self.platform.release(id, provider);
         }
     }
 }
@@ -638,12 +660,9 @@ fn receive<T>(reply: &Receiver<T>) -> Result<Option<T>> {
     }
 }
 
-fn java_check_deadline(request: &RequestState) -> Instant {
-    let now = Instant::now();
-    now + (request.deadline.saturating_duration_since(now) / 2).min(Duration::from_millis(500))
-}
-
-mod providers;
+mod platform;
+#[cfg(windows)]
+mod windows_platform;
 
 #[cfg(test)]
 mod tests;

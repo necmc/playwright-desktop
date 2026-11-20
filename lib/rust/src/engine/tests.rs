@@ -1,14 +1,66 @@
 use super::*;
-use crate::{jab::{ffi::{JavaObject, VmId}, loader::tests::test_library}, windows};
-use ::windows::{
-    Win32::{
-        Foundation::HWND,
-        UI::WindowsAndMessaging::{CreateWindowExW, DestroyWindow, WINDOW_EX_STYLE, WS_POPUP},
-    },
-    core::w,
-};
-use std::{cell::{Cell, RefCell}, rc::Rc};
+use std::cell::Cell;
 
+#[derive(Default)]
+struct FakePlatform {
+    windows: Vec<(u32, &'static str)>,
+    actions: usize,
+    released: Cell<Option<u64>>,
+}
+
+impl Platform for FakePlatform {
+    type Window = (u32, &'static str);
+    type WindowKey = u32;
+    type Provider = &'static str;
+
+    fn candidates(&self, title: &str, pid: Option<u32>) -> Result<Vec<Self::Window>> {
+        Ok(self.windows.iter().copied()
+            .filter(|(id, name)| (title.is_empty() || *name == title) && pid.is_none_or(|pid| pid == *id))
+            .collect())
+    }
+
+    fn window_key(&self, window: &Self::Window) -> Self::WindowKey {
+        window.0
+    }
+
+    fn is_window_alive(&self, window: &Self::Window) -> bool {
+        self.windows.contains(window)
+    }
+
+    fn prepare_capture(&mut self, _: Arc<RequestState>) -> Result<Option<CapturePreparation>> {
+        Ok(None)
+    }
+
+    fn resolve_provider(&mut self, request: Arc<RequestState>, _: Self::Window) -> ProviderSelection<Self::Provider> {
+        let (sender, result) = mpsc::channel();
+        sender.send(Ok("fake")).unwrap();
+        ProviderSelection::Pending { result, until: request.deadline, fallback: "fallback" }
+    }
+
+    fn act(
+        &mut self, provider: Self::Provider, request: Arc<RequestState>, _: u64, window: Self::Window,
+        action: ControlAction, query: ControlQuery,
+    ) -> Result<Receiver<Result<Option<ControlResult>>>> {
+        request.check()?;
+        assert_eq!(provider, "fake");
+        assert_eq!(window.0, 2);
+        assert_eq!(query.name, "Aceptar");
+        assert!(matches!(action, ControlAction::Click));
+        self.actions += 1;
+        let (sender, result) = mpsc::channel();
+        sender.send(Ok(Some(ControlResult { text: None }))).unwrap();
+        Ok(result)
+    }
+
+    fn release(&self, id: u64, provider: Self::Provider) {
+        assert_eq!(provider, "fake");
+        self.released.set(Some(id));
+    }
+
+    fn retain_sessions(&self, _: HashSet<u64>) {}
+
+    fn check_health(&self) {}
+}
 fn session(id: u64) -> Arc<SessionState> {
     Arc::new(SessionState {
         id,
@@ -24,46 +76,52 @@ fn request(session: Arc<SessionState>, deadline: Instant) -> Arc<RequestState> {
     })
 }
 
-fn test_worker() -> Worker {
+fn test_worker() -> Worker<FakePlatform> {
     let (sender, _receiver) = mpsc::channel();
-    Worker::new(Arc::new(Shared::new(sender)))
+    Worker::new(Arc::new(Shared::new(sender)), FakePlatform::default())
 }
 
 fn command(
     request: Arc<RequestState>, operation: Operation, arguments: Arguments,
-) -> (Command, Receiver<Result<Reply>>) {
+) -> (ActiveCommand<&'static str>, Receiver<Result<Reply>>) {
     let (reply, receiver) = mpsc::channel();
     (Command { request, operation, arguments, reply, pending: None }, receiver)
 }
 
-struct HiddenWindow(HWND);
+#[test]
+fn a_platform_adapter_can_capture_operate_and_release_a_window() {
+    let mut worker = test_worker();
+    let owner = session(1);
+    worker.shared.sessions.lock().unwrap().insert(owner.id, owner.clone());
+    let deadline = Instant::now() + Duration::from_secs(10);
+    worker.platform.windows.push((1, "Opciones"));
 
-impl HiddenWindow {
-    fn new() -> Self {
-        // SAFETY: STATIC is a system class and the window has no parent or callback data.
-        let handle = unsafe {
-            CreateWindowExW(WINDOW_EX_STYLE(0), w!("STATIC"), w!("JAB worker test"),
-                           WS_POPUP, 0, 0, 1, 1, None, None, None, None)
-        }.expect("create hidden window");
-        Self(handle)
-    }
+    let (mut prepare, _) = command(request(owner.clone(), deadline), Operation::PrepareCapture, Arguments {
+        title: "Opciones".into(), ..Arguments::default()
+    });
+    let capture_id = worker.step(&mut prepare).unwrap().unwrap().handle;
 
-    fn window(&self) -> windows::Window {
-        let window = windows::Window {
-            hwnd: self.0.0 as isize,
-            pid: std::process::id(),
-            title: "JAB worker test".into(),
-        };
-        assert!(windows::valid(&window));
-        window
-    }
-}
+    worker.platform.windows.push((2, "Opciones"));
+    let (mut capture, _) = command(request(owner.clone(), deadline), Operation::CompleteCapture, Arguments {
+        capture_id, ..Arguments::default()
+    });
+    let window_id = worker.step(&mut capture).unwrap().unwrap().handle;
 
-impl Drop for HiddenWindow {
-    fn drop(&mut self) {
-        // SAFETY: this test thread created and owns the window.
-        unsafe { let _ = DestroyWindow(self.0); }
-    }
+    let (mut click, _) = command(request(owner.clone(), deadline), Operation::Window(WindowOperation::Click), Arguments {
+        window_id, control: ControlQuery { name: "Aceptar".into(), ..ControlQuery::default() }, ..Arguments::default()
+    });
+    assert!(worker.step(&mut click).unwrap().is_none());
+    assert!(worker.step(&mut click).unwrap().is_none());
+    assert_eq!(worker.step(&mut click).unwrap().unwrap().handle, window_id);
+    assert_eq!(worker.platform.actions, 1);
+
+    worker.platform.windows.pop();
+    worker.cleanup();
+    assert_eq!(worker.platform.released.get(), Some(window_id));
+    let (mut closed, _) = command(request(owner, deadline), Operation::Window(WindowOperation::WaitClosed), Arguments {
+        window_id, ..Arguments::default()
+    });
+    assert_eq!(worker.step(&mut closed).unwrap().unwrap().handle, window_id);
 }
 
 #[test]
@@ -173,62 +231,4 @@ fn cancelling_a_queued_preparation_after_reservation_releases_it_before_the_next
     let capture = second_reply.try_recv().unwrap().expect("the next preparation can reserve the engine").handle;
     assert!(!worker.captures.contains_key(&previous_capture));
     assert!(worker.captures.contains_key(&capture));
-}
-
-#[test]
-fn a_reused_hwnd_cannot_route_an_action_to_a_different_java_root() {
-    assert_stale_root(4, "reused the handle", 2);
-}
-
-#[test]
-fn an_unavailable_java_root_releases_the_window_on_the_worker_thread() {
-    assert_stale_root(0, "no longer accessible", 1);
-}
-
-fn assert_stale_root(next_root: JavaObject, expected_error: &str, expected_releases: usize) {
-    thread_local! {
-        static ROOT: Cell<JavaObject> = const { Cell::new(1) };
-        static JAB_THREADS: RefCell<Vec<(bool, std::thread::ThreadId)>> = const { RefCell::new(Vec::new()) };
-    }
-
-    unsafe extern "C" fn current_root(_: HWND, vm: *mut VmId, object: *mut JavaObject) -> i32 {
-        JAB_THREADS.with_borrow_mut(|threads| threads.push((false, std::thread::current().id())));
-        // SAFETY: Object::root passes writable out parameters.
-        unsafe {
-            *vm = 7;
-            *object = ROOT.get();
-        }
-        1
-    }
-
-    extern "C" fn release(_: VmId, _: JavaObject) {
-        JAB_THREADS.with_borrow_mut(|threads| threads.push((true, std::thread::current().id())));
-    }
-
-    let handle = HiddenWindow::new();
-    let window = handle.window();
-
-    let worker = std::thread::spawn(move || {
-        let mut library = test_library();
-        let bindings = Rc::get_mut(&mut library).unwrap();
-        bindings.context = current_root;
-        bindings.release = release;
-        let backend = Backend::with_test_library(library, []);
-        let target = backend.attach_test_window(window).unwrap().expect("original Java root");
-        ROOT.set(next_root);
-        let error = match target.state() {
-            crate::backend::WindowState::Replaced(error) | crate::backend::WindowState::Inaccessible(error) => error,
-            _ => panic!("reject the stale Java root"),
-        };
-        drop(target);
-        let calls = JAB_THREADS.with_borrow_mut(std::mem::take);
-        (error, calls)
-    });
-    let thread_id = worker.thread().id();
-    let (error, calls) = worker.join().unwrap();
-    assert_eq!(error.code, "STALE");
-    assert!(error.message.contains(expected_error));
-    assert_eq!(calls.iter().filter(|(released, _)| *released).count(), expected_releases);
-    assert_eq!(calls.iter().filter(|(released, _)| !*released).count(), 2);
-    assert!(calls.iter().all(|(_, id)| *id == thread_id));
 }
