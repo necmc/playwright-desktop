@@ -112,11 +112,17 @@ impl Target {
         }
         let Some(control) = self.root.find(role, name, &|| request.check())? else { return Ok(None); };
         request.check()?;
-        if !control.ready(matches!(action, ControlAction::Fill(_)))? {
+        let required_states: &[&str] = match &action {
+            ControlAction::WaitVisible => &["showing"],
+            ControlAction::Fill(_) => &["showing", "enabled", "editable"],
+            _ => &["showing", "enabled"],
+        };
+        if !control.has_states(required_states)? {
             return Ok(None);
         }
         request.check()?;
         let text = match (action, role) {
+            (ControlAction::WaitVisible, _) => None,
             (ControlAction::ReadText, "textbox") => Some(control.text()?),
             (ControlAction::Fill(text), "textbox") => { control.fill(&text, request)?; None }
             (ControlAction::Click, "button") => { control.click(request)?; None }

@@ -91,11 +91,10 @@ impl Object {
         Ok(found)
     }
 
-    pub fn ready(&self, editable: bool) -> Result<bool> {
+    pub fn has_states(&self, required: &[&str]) -> Result<bool> {
         let info = self.info()?;
         let states = decode(&info.states_en_us)?;
-        let has = |state: &str| states.split(',').any(|part| part.trim() == state);
-        Ok(has("enabled") && has("showing") && (!editable || has("editable")))
+        Ok(required.iter().all(|state| states.split(',').any(|part| part.trim() == *state)))
     }
 
     pub fn text(&self) -> Result<String> {

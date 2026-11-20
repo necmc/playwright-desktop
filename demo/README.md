@@ -14,9 +14,11 @@ Abre la demo y pulsa **Obtener información**. Confirma el aviso del navegador o
 
 ## Ejecutar pc-info-automation
 
-Instala Microsoft Edge, deja `pc-info` en ejecución y abre otra terminal. Define `JAVA_HOME` con el JDK de la demo. Ambas opciones ejecutan el mismo recorrido. Si Edge pide confirmación, pulsa **Abrir** cuando la prueba lo indique.
+Instala Microsoft Edge, deja `pc-info` en ejecución y abre otra terminal. Define `JAVA_HOME` con el JDK de la demo. Ambas opciones ejecutan el mismo recorrido.
 
 ### Versión publicada
+
+Requiere una distribución de la librería con soporte nativo de Windows.
 
 ```powershell
 py -m pip install playwright-desktop pypdf

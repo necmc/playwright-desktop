@@ -147,6 +147,7 @@ impl Operation {
         match name {
             "prepare" => Ok(Self::PrepareCapture),
             "capture" => Ok(Self::CompleteCapture),
+            "wait_visible" => Ok(Self::Window(WindowOperation::WaitVisible)),
             "read_text" => Ok(Self::Window(WindowOperation::ReadText)),
             "fill" => Ok(Self::Window(WindowOperation::Fill)),
             "click" => Ok(Self::Window(WindowOperation::Click)),
@@ -158,6 +159,7 @@ impl Operation {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum WindowOperation {
+    WaitVisible,
     ReadText,
     Fill,
     Click,
@@ -637,6 +639,7 @@ impl<P: Platform> Worker<P> {
         let item = self.windows.get_mut(&id).unwrap();
         let provider = *item.provider.get_or_insert(provider);
         let action = match command.operation {
+            Operation::Window(WindowOperation::WaitVisible) => ControlAction::WaitVisible,
             Operation::Window(WindowOperation::ReadText) => ControlAction::ReadText,
             Operation::Window(WindowOperation::Fill) => ControlAction::Fill(command.arguments.text.clone()),
             Operation::Window(WindowOperation::Click) => ControlAction::Click,

@@ -14,7 +14,7 @@
 
 - Mantener `page.desktop.window()` y `page.desktop.expect_window()` con la sintaxis actual. El motor se selecciona internamente por ventana. Una misma `Page` puede manejar una ventana nativa y otra Swing con el mismo contrato.
 - Usar `window()` para una ventana existente y `expect_window()` para una ventana de nivel superior que aparezca durante la acción. La captura identifica la ventana y la primera búsqueda de un control confirma el proveedor. `window(pid=pid)` admite un proceso con una única ventana visible con título. Las capturas conservan el título exacto, el filtro por PID, `.value` y `wait_for_closed()`.
-- Buscar los avisos y paneles integrados dentro de su ventana. Para limitar la búsqueda a un panel, admitir una búsqueda anidada con `get_by_role()` bajo un `dialog`, `group`, `menu` o `listitem` que UIA exponga. El control puede encontrarse por nombre accesible aunque el popup carezca de título propio.
+- Buscar los avisos y paneles integrados dentro de su ventana. La búsqueda anidada con `get_by_role()` admite `dialog`, `group`, `pane`, `menu` y `listitem`. `wait_for()` espera que el control sea visible.
 - Admitir `button`, `link` y `menuitem` por nombre accesible exacto. `click()` invoca la acción UIA del control si expone `InvokePattern`. El resultado funcional se comprueba esperando una consecuencia observable, como que aparezca o se cierre un aviso.
 - Las acciones nativas funcionan sin configurar Java. La configuración existente de `java_home` sigue siendo una pista para localizar el bridge de Swing. `page.desktop.get_by_role()` conserva el comportamiento de usar la última ventana capturada.
 

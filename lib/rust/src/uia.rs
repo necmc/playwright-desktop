@@ -82,8 +82,9 @@ impl Client {
         &self, target: &Target, action: ControlAction, control: Selector<'_>,
         scope: Option<Selector<'_>>, request: &RequestState,
     ) -> Result<Option<ControlResult>> {
-        if !matches!(action, ControlAction::Click) || !matches!(control.role, "button" | "link" | "menuitem") {
-            return Err(Failure::new("ACTION", "UI Automation supports click() on buttons, links and menu items."));
+        match (&action, control.role) {
+            (ControlAction::WaitVisible, _) | (ControlAction::Click, "button" | "link" | "menuitem") => {}
+            _ => return Err(Failure::new("ACTION", "UI Automation supports wait_for() and limits click() to buttons, links and menu items.")),
         }
         let check = || request.check();
         let container = if let Some(scope) = scope {
@@ -93,6 +94,9 @@ impl Client {
             target.root.clone()
         };
         let Some(element) = self.find(&container, control, &check)? else { return Ok(None); };
+        if matches!(action, ControlAction::WaitVisible) {
+            return Ok(Some(ControlResult { text: None }));
+        }
         // SAFETY: the element is live on this worker; stale elements report an HRESULT.
         if !unsafe { element.CurrentIsEnabled() }.map_err(|error| action_error("check whether the control is enabled", error))?.as_bool() {
             return Ok(None);
@@ -111,10 +115,13 @@ impl Client {
     ) -> Result<Option<IUIAutomationElement>> {
         let control_type = match selector.role {
             "button" => UIA_ButtonControlTypeId,
+            "text" => UIA_TextControlTypeId,
+            "textbox" => UIA_EditControlTypeId,
             "link" => UIA_HyperlinkControlTypeId,
             "menuitem" => UIA_MenuItemControlTypeId,
             "dialog" => UIA_WindowControlTypeId,
             "group" => UIA_GroupControlTypeId,
+            "pane" => UIA_PaneControlTypeId,
             "menu" => UIA_MenuControlTypeId,
             "listitem" => UIA_ListItemControlTypeId,
             _ => return Err(Failure::new("CONFIGURATION", "Unsupported UI Automation role.")),

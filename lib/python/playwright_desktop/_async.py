@@ -79,6 +79,9 @@ class Locator:
             parameters.update(scope_role=self._scope[0], scope_name=self._scope[1])
         return await self._window._call(operation, timeout, role=self._role, name=self._name, **parameters)
 
+    async def wait_for(self, *, timeout: float | None = None) -> None:
+        await self._call("wait_visible", timeout)
+
     async def fill(self, text: str, *, timeout: float | None = None) -> None:
         validate_action_role(self._role, "textbox", "fill")
         validate_text(text)

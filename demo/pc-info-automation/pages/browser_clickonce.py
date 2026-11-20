@@ -20,14 +20,14 @@ class BrowserClickOnce:
             confirmation_title, open_button = "Do you want to open this file?", "Open"
             open_link = "Open file"
 
-        notice = window.get_by_role("dialog", name=confirmation_title)
-        if self._try_click(notice.get_by_role("button", name=open_button), timeout=8_000):
+        notice = window.get_by_role("pane", name=confirmation_title)
+        if self._click_if_visible(notice.get_by_role("button", name=open_button), timeout=8_000):
             print("ClickOnce: clic en Abrir del aviso del navegador.", flush=True)
             return
 
         item = window.get_by_role("listitem", name=MANIFEST)
         link = item.get_by_role("link", name=open_link)
-        if self._try_click(link, timeout=1_000):
+        if self._click_if_visible(link, timeout=1_000):
             print("ClickOnce: clic en Abrir archivo del aviso de descargas.", flush=True)
             return
 
@@ -46,11 +46,10 @@ class BrowserClickOnce:
         return self.page.desktop.window(pid=pid, title_prefix=title_prefix)
 
     @staticmethod
-    def _try_click(locator, *, timeout: int) -> bool:
+    def _click_if_visible(locator, *, timeout: int) -> bool:
         try:
-            locator.click(timeout=timeout)
-        except DesktopTimeoutError as error:
-            if "effect may be unknown" in str(error):
-                raise
+            locator.wait_for(timeout=timeout)
+        except DesktopTimeoutError:
             return False
+        locator.click(timeout=timeout)
         return True

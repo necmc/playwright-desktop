@@ -5,7 +5,7 @@ from dataclasses import dataclass
 MAX_TIMEOUT_MS = 2**32 - 1
 MAX_PROCESS_ID = 2**32 - 1
 CLICK_ROLES = ("button", "link", "menuitem")
-SCOPE_ROLES = ("dialog", "group", "menu", "listitem")
+SCOPE_ROLES = ("dialog", "group", "pane", "menu", "listitem")
 
 
 def validate_string(value: str, label: str) -> str:
@@ -43,14 +43,14 @@ class WindowQuery:
 
 
 def validate_control(role: str, name: str) -> None:
-    if role not in ("textbox", *CLICK_ROLES, *SCOPE_ROLES):
+    if role not in ("text", "textbox", *CLICK_ROLES, *SCOPE_ROLES):
         raise ValueError("Unsupported desktop role.")
     validate_string(name, "name")
 
 
 def validate_scope(role: str, name: str, scope: tuple[str, str] | None) -> tuple[str, str]:
     if scope is not None or role not in SCOPE_ROLES:
-        raise ValueError("Scoped lookup requires a window-level dialog, group, menu or list item.")
+        raise ValueError("Scoped lookup requires a window-level dialog, group, pane, menu or list item.")
     return role, name
 
 

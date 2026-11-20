@@ -1,9 +1,10 @@
 import playwright_desktop
-from playwright_desktop import DesktopTimeoutError
 
 from config import ACTIVATION_TIMEOUT_MS
 from fixtures.demo import DemoTestCase
 from models.equipment_information import EquipmentInformation
+from pages.browser_clickonce import BrowserClickOnce
+from pages.clickonce_installer import ClickOnceInstaller
 from pages.information_form import InformationForm
 from utils.pdf import extract_pdf_text
 
@@ -19,17 +20,15 @@ class PcInfoFlowTests(DemoTestCase):
             date="2026-11-19", computer_name="EQUIPO-CLICKONCE", alias="Integración Ñ"
         )
 
-        try:
-            with page.desktop.expect_window(
-                title=InformationForm.TITLE, timeout=ACTIVATION_TIMEOUT_MS
-            ) as opened:
-                self.web.request_information()
-                print("Si Edge solicita abrir el archivo, pulsa «Abrir» y revisa los avisos de ClickOnce.", flush=True)
-        except DesktopTimeoutError:
-            raise AssertionError(
-                f"No se abrió la ventana «{InformationForm.TITLE}». "
-                "Revisa los avisos pendientes de Edge o ClickOnce."
-            ) from None
+        browser = BrowserClickOnce(page)
+        installer = ClickOnceInstaller(
+            page, application_name=InformationForm.TITLE, base_url=self.web.base_url,
+        )
+        with page.desktop.expect_window(
+            title=InformationForm.TITLE, timeout=ACTIVATION_TIMEOUT_MS
+        ) as opened:
+            self.web.request_information()
+            installer.confirm_after(browser.click_open)
 
         form = InformationForm(opened.value)
         form.fill(expected)

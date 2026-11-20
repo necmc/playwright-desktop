@@ -18,7 +18,8 @@ Datos de prueba: fecha `2026-11-19`, equipo `EQUIPO-CLICKONCE` y alias `Integrac
 
 | Paso | Resultado esperado |
 | --- | --- |
-| La prueba pulsa **Obtener información**. Si Edge solicita abrir el archivo, pulsa **Abrir** y revisa los avisos de ClickOnce. | Se abre una nueva ventana **Información del equipo**. |
+| La prueba pulsa **Obtener información** y **Abrir** en Edge. | ClickOnce inicia la activación de la aplicación. |
+| Si ClickOnce muestra la confirmación, la prueba valida el nombre de la demo y su origen y pulsa **Ejecutar**. | Se abre una nueva ventana **Información del equipo**. |
 | Edita los tres campos y pulsa **Confirmar**. | La ventana Java se cierra. |
 | Revisa el resultado en la web. | La página muestra los tres valores ingresados, el mensaje de confirmación y el visor PDF. |
 | Lee el PDF generado. | Su texto contiene los tres valores ingresados. |
@@ -38,7 +39,7 @@ Verificación independiente que requiere una versión con soporte nativo de Wind
 | `run.py` | Verifica la disponibilidad de la demo y ejecuta CP-PI-01. |
 | `tests/test_flow.py` | Define el recorrido y sus resultados esperados. Captura la ventana con `page.desktop.expect_window()` y la entrega al Page Object con `opened.value`. |
 | `tests/test_clickonce.py` | Contiene la verificación independiente del clic de apertura en Edge. |
-| `pages/` | Contiene los objetos de la página web, del formulario Java y del aviso del navegador. |
+| `pages/` | Contiene los objetos de la web, del aviso del navegador, del instalador y del formulario Java. |
 | `models/` | Contiene `EquipmentInformation`, el DTO con los tres datos que se comparan a lo largo del flujo. |
 | `fixtures/` | Abre Edge con un perfil temporal y libera los recursos de cada prueba. |
 | `utils/` | Extrae el texto del PDF para comprobar su contenido. |

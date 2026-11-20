@@ -141,7 +141,9 @@ class WindowsUiaTests(unittest.TestCase):
                     with self.assertRaises(AmbiguousMatchError):
                         await window.get_by_role("button", name="Aplicar").click()
                     notice = window.get_by_role("group", name="Opciones integradas")
-                    await notice.get_by_role("button", name="Aplicar").click()
+                    apply = notice.get_by_role("button", name="Aplicar")
+                    await apply.wait_for()
+                    await apply.click()
                     await asyncio.to_thread(self.wait_for_result, "inside")
                     self.assertNotIn("outside", self.results.read_text().splitlines())
                 finally:

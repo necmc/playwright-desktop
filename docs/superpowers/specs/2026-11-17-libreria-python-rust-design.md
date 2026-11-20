@@ -97,7 +97,7 @@ El contrato Rust separa el coordinador del adaptador de Windows. Cada adaptador 
 
 Cada build limpia únicamente sus artefactos. Python utiliza `dist/python/` y `rust/target/python/`; sus scripts no eliminan las carpetas de otros SDK.
 
-La demo usa Page Object Model (POM). CP-PI-01 espera Java mediante `page.desktop.expect_window()` después del clic web y, si Edge muestra el aviso, requiere confirmación del usuario. El mismo caso se ejecuta con la librería publicada o con el wheel local. CP-PI-02 verifica por separado el clic de apertura mediante PID y prefijo de título. Las comprobaciones del motor y de concurrencia pertenecen a la librería.
+La demo usa Page Object Model (POM). CP-PI-01 pulsa **Abrir** en Edge, resuelve la confirmación opcional de ClickOnce para la demo y espera Java mediante `page.desktop.expect_window()`. CP-PI-02 verifica por separado el clic de apertura mediante PID y prefijo de título. Las comprobaciones del motor y de concurrencia pertenecen a la librería.
 
 Cada demo conserva su aplicación en `demo/<nombre>/` y todos los flujos que utilizan la librería en `demo/<nombre>-automation/`. Las pruebas internas de la librería pertenecen a `lib/tests/`.
 
@@ -135,7 +135,7 @@ La variante async conserva los imports de `playwright.async_api`, utiliza `async
 
 `page.desktop.window()` identifica una ventana existente por `title`, `title_prefix` o `pid`. El PID se puede combinar con un filtro de título. Su primera acción espera una coincidencia única. `expect_window()` toma una instantánea antes del clic web, espera una ventana nueva y la asocia al `page.desktop` de esa página al salir del contexto. `get_by_role()` y `wait_for_closed()` usan el identificador nativo capturado y requieren una captura exitosa previa. El objeto devuelto por `as opened` conserva `.value`. El timeout predeterminado es 10 000 ms y puede cambiarse con `page.desktop.set_default_timeout(ms)`. Cero hace una comprobación inmediata.
 
-JAB permite leer y editar campos de texto y accionar botones. UIA permite accionar botones, enlaces y opciones de menú y buscar esos controles dentro de un contenedor accesible. `get_by_role()` compara el nombre accesible exacto.
+Rust busca controles por nombre accesible exacto, comprueba su visibilidad y ejecuta las acciones mediante cada proveedor. Las fachadas Python envían las solicitudes al motor. `wait_for()` espera que el control sea visible. JAB admite campos y botones Swing. UIA admite también texto y paneles, y permite accionar botones, enlaces y opciones de menú.
 
 El parche utiliza las clases exportadas por `playwright.sync_api.Page` y `playwright.async_api.Page`, sin reemplazarlas ni utilizar `_impl`, greenlets privados o clases internas de Playwright. La implementación sigue estas reglas:
 

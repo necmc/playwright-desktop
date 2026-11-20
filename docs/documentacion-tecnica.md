@@ -77,7 +77,7 @@ El lanzador obtiene la ruta de Java de su archivo de configuración. El formular
 
 ### Automatización de la demo
 
-La automatización usa el puerto predeterminado. `run.py` comprueba que la demo responde y ejecuta CP-PI-01. El caso espera la ventana Java después del clic web. Si Edge solicita la apertura, la terminal indica cuándo confirmarla. La librería localiza Java Access Bridge mediante `JAVA_HOME`.
+La automatización usa el puerto predeterminado. `run.py` comprueba que la demo responde y ejecuta CP-PI-01. El caso pulsa **Abrir** en Edge. Si ClickOnce solicita confirmación, verifica el nombre y el origen de la demo antes de pulsar **Ejecutar**. La librería espera la ventana Java mediante `page.desktop.expect_window()` y localiza Java Access Bridge mediante `JAVA_HOME`.
 
 CP-PI-02 comprueba el clic de apertura de forma independiente con el soporte nativo de Windows. Su Page Object localiza la ventana del navegador con `page.desktop.window(pid=pid, title_prefix=...)`.
 

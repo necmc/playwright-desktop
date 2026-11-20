@@ -70,12 +70,19 @@ class ApiTests(unittest.TestCase):
         page = FakePage()
         session = Session(page)
         desktop = Desktop(session)
-        with patch.object(session, "call", return_value=SimpleNamespace(handle=4)) as request:
-            popup = desktop.window(title="Edge", pid=42).get_by_role("dialog", name="Descargas")
-            popup.get_by_role("link", name="Abrir archivo").click()
-        self.assertEqual(request.call_args.kwargs["scope_role"], "dialog")
-        self.assertEqual(request.call_args.kwargs["scope_name"], "Descargas")
-        self.assertEqual(request.call_args.kwargs["role"], "link")
+        for role in ("dialog", "pane"):
+            with self.subTest(role=role), patch.object(
+                session, "call", return_value=SimpleNamespace(handle=4)
+            ) as request:
+                popup = desktop.window(title="Edge", pid=42).get_by_role(role, name="Descargas")
+                link = popup.get_by_role("link", name="Abrir archivo")
+                link.wait_for(timeout=500)
+                self.assertEqual(request.call_args.args[0], "wait_visible")
+                self.assertEqual(request.call_args.kwargs["scope_role"], role)
+                link.click()
+                self.assertEqual(request.call_args.kwargs["scope_role"], role)
+                self.assertEqual(request.call_args.kwargs["scope_name"], "Descargas")
+                self.assertEqual(request.call_args.kwargs["role"], "link")
 
     def test_common_text_validation_accepts_long_unicode_and_rejects_invalid_text(self):
         validate_text("\U00010400" * 512)

@@ -8,6 +8,7 @@ use std::{
 };
 
 pub(crate) enum ControlAction {
+    WaitVisible,
     ReadText,
     Fill(String),
     Click,
