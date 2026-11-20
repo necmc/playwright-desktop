@@ -3,6 +3,7 @@
 from contextlib import contextmanager, nullcontext
 import ctypes
 from ctypes import wintypes
+import json
 from os import environ
 from pathlib import Path
 import sys
@@ -61,10 +62,9 @@ def select_browser() -> Path:
 
 
 @contextmanager
-def open_clickonce_context(playwright: Playwright):
-    executable = select_browser()
+def open_clickonce_context(playwright: Playwright, executable: Path, *, use_extension_profile: bool):
     profile = None
-    if executable.name.lower() != "msedge.exe":
+    if use_extension_profile and executable.name.lower() != "msedge.exe":
         name = BROWSER_NAMES[executable.name.lower()]
         extension_profile = Path(environ["LOCALAPPDATA"]) / "playwright-desktop" / "pc-info" / executable.stem.lower()
         print(f"Para abrir ClickOnce en {name}, usa una extensión compatible en el perfil de prueba o usa Edge.", flush=True)
@@ -74,6 +74,13 @@ def open_clickonce_context(playwright: Playwright):
 
     profile_context = nullcontext(profile) if profile else TemporaryDirectory(prefix="pc-info-browser-")
     with profile_context as user_data_dir:
+        if profile is None:
+            directory = Path(user_data_dir)
+            preferences = directory / "Default" / "Preferences"
+            preferences.parent.mkdir()
+            preferences.write_text(json.dumps({
+                "download": {"default_directory": str(directory / "downloads")},
+            }), encoding="utf-8")
         context = playwright.chromium.launch_persistent_context(
             user_data_dir,
             executable_path=executable,

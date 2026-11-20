@@ -135,7 +135,7 @@ class WindowsUiaTests(unittest.TestCase):
                 browser = await playwright.chromium.launch(channel="msedge")
                 try:
                     page = await browser.new_page()
-                    window = page.desktop.window(title=self.title, pid=pid)
+                    window = page.desktop.window(pid=pid, title_prefix="Playwright desktop UIA ")
                     await window.get_by_role("button", name="Mostrar aviso").click()
                     await asyncio.to_thread(self.wait_for_result, "notice")
                     with self.assertRaises(AmbiguousMatchError):

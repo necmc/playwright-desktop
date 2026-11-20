@@ -1,5 +1,5 @@
 use crate::error::{Failure, Result};
-use platform::{CapturePreparation, ControlQuery, Platform, ProviderSelection};
+use platform::{CapturePreparation, ControlQuery, Platform, ProviderSelection, WindowQuery};
 pub(crate) use platform::{ControlAction, ControlResult};
 use pyo3::prelude::*;
 use std::{collections::{HashMap, HashSet, VecDeque}, path::Path,
@@ -123,8 +123,7 @@ static SHARED: OnceLock<Mutex<Option<Arc<Shared>>>> = OnceLock::new();
 struct Arguments {
     window_id: u64,
     capture_id: u64,
-    title: String,
-    pid: Option<u32>,
+    window: WindowQuery,
     text: String,
     control: ControlQuery,
 }
@@ -238,10 +237,10 @@ impl Engine {
         Ok(Request { state: Arc::new(RequestState::new(session, deadline, timeout_ms == 0)) })
     }
 
-    #[pyo3(signature = (request, operation, *, window_id=0, capture_id=0, title="", pid=None, role="", name="", text="", scope_role="", scope_name=""))]
+    #[pyo3(signature = (request, operation, *, window_id=0, capture_id=0, title="", pid=None, role="", name="", text="", scope_role="", scope_name="", title_prefix=""))]
     fn invoke(&self, py: Python<'_>, request: &Request, operation: &str,
               window_id: u64, capture_id: u64, title: &str, pid: Option<u32>,
-              role: &str, name: &str, text: &str, scope_role: &str, scope_name: &str) -> PyResult<Reply> {
+              role: &str, name: &str, text: &str, scope_role: &str, scope_name: &str, title_prefix: &str) -> PyResult<Reply> {
         self.healthy().map_err(as_python)?;
         request.state.check().map_err(as_python)?;
         let operation = Operation::parse(operation).map_err(as_python)?;
@@ -253,7 +252,8 @@ impl Engine {
         let state = request.state.clone();
         let command = Command { request: state.clone(), operation,
             arguments: Arguments {
-                window_id, capture_id, title: title.into(), pid, text: text.into(),
+                window_id, capture_id, text: text.into(),
+                window: WindowQuery { title: title.into(), pid, title_prefix: title_prefix.into() },
                 control: ControlQuery { role: role.into(), name: name.into(), scope_role: scope_role.into(), scope_name: scope_name.into() },
             },
             reply: sender, pending: () };
@@ -363,8 +363,7 @@ impl Shared {
 
 struct Capture<K> {
     session: u64,
-    title: String,
-    pid: Option<u32>,
+    query: WindowQuery,
     before: HashSet<K>,
     request: Arc<RequestState>,
 }
@@ -481,15 +480,16 @@ impl<P: Platform> Worker<P> {
     }
 
     fn discover(
-        &mut self, request: &RequestState, title: &str, pid: Option<u32>, capture: Option<(u64, &HashSet<P::WindowKey>)>,
+        &mut self, request: &RequestState, query: &WindowQuery, capture: Option<(u64, &HashSet<P::WindowKey>)>,
     ) -> Result<Option<u64>> {
         let session = request.session.id;
         self.require_owner(session)?;
-        let mut candidates = self.platform.candidates(title, pid)?.into_iter()
+        query.validate()?;
+        let mut candidates = self.platform.candidates(query)?.into_iter()
             .filter(|window| !capture.is_some_and(|(_, before)| before.contains(&self.platform.window_key(window))));
         let Some(candidate) = candidates.next() else { return Ok(None); };
         if candidates.next().is_some() {
-            let filter = if title.is_empty() { "an exact title" } else { "a PID" };
+            let filter = if query.title.is_empty() { "an exact title" } else { "a PID" };
             return Err(Failure::new("AMBIGUOUS", format!("More than one window matches. Add {filter} to narrow the search.")));
         }
         request.check()?;
@@ -570,12 +570,13 @@ impl<P: Platform> Worker<P> {
     fn prepare_capture(&mut self, request: &Arc<RequestState>, args: &Arguments) -> Result<Option<Reply>> {
         let session = request.session.id;
         self.require_owner(session)?;
-        let before = self.platform.candidates(&args.title, args.pid)?.iter()
+        args.window.validate()?;
+        let before = self.platform.candidates(&args.window)?.iter()
             .map(|window| self.platform.window_key(window)).collect();
         request.check()?;
         let id = self.shared.next.fetch_add(1, Ordering::Relaxed);
         self.captures.insert(id, Capture {
-            session, title: args.title.clone(), pid: args.pid, before, request: request.clone(),
+            session, query: args.window.clone(), before, request: request.clone(),
         });
         Ok(Some(Reply { handle: id, text: None }))
     }
@@ -583,10 +584,9 @@ impl<P: Platform> Worker<P> {
     fn complete_capture(&mut self, request: &RequestState, capture_id: u64) -> Result<Option<Reply>> {
         let capture = self.captures.get(&capture_id).filter(|capture| capture.session == request.session.id)
             .ok_or_else(|| Failure::new("CLOSED", "The window capture is no longer active."))?;
-        let title = capture.title.clone();
-        let pid = capture.pid;
+        let query = capture.query.clone();
         let before = capture.before.clone();
-        let Some(id) = self.discover(request, &title, pid, Some((capture_id, &before)))? else {
+        let Some(id) = self.discover(request, &query, Some((capture_id, &before)))? else {
             return Ok(None);
         };
         self.captures.remove(&capture_id);
@@ -597,7 +597,7 @@ impl<P: Platform> Worker<P> {
         if args.window_id != 0 {
             return Ok(Some(args.window_id));
         }
-        self.discover(request, &args.title, args.pid, None)
+        self.discover(request, &args.window, None)
     }
 
     fn operate_window(&mut self, command: &mut ActiveCommand<P::Provider>, operation: WindowOperation) -> Result<Option<Reply>> {

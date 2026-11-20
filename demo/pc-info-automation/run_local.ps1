@@ -8,16 +8,19 @@ if ($wheels.Count -ne 1) { throw 'Se esperaba un wheel en lib/dist/python.' }
 $tempRoot = (Resolve-Path -LiteralPath $env:TEMP).Path
 $localInstall = Join-Path $tempRoot ('pc-info-wheel-' + [guid]::NewGuid().ToString('N'))
 $previousPythonPath = $env:PYTHONPATH
+$previousLocalWheel = $env:PC_INFO_LOCAL_WHEEL
 try {
     py -m pip install --target $localInstall $wheels[0].FullName pypdf
     if ($LASTEXITCODE -ne 0) { throw 'No se pudo instalar el wheel local.' }
 
     $env:PYTHONPATH = $localInstall
+    $env:PC_INFO_LOCAL_WHEEL = '1'
     py (Join-Path $PSScriptRoot 'run.py')
     exit $LASTEXITCODE
 }
 finally {
     $env:PYTHONPATH = $previousPythonPath
+    $env:PC_INFO_LOCAL_WHEEL = $previousLocalWheel
     $directory = Get-Item -LiteralPath $localInstall -ErrorAction SilentlyContinue
     if ($directory -and $directory.FullName -eq $localInstall -and -not ($directory.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
         Remove-Item -LiteralPath $directory.FullName -Recurse -Force

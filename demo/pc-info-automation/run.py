@@ -1,6 +1,7 @@
 """Ejecuta el escenario funcional de la demo con su configuración local."""
 
 from http.client import HTTPException
+from os import environ
 import sys
 import unittest
 from urllib.request import urlopen
@@ -22,13 +23,16 @@ def main() -> int:
         return 1
 
     try:
-        from tests.test_flow import PcInfoFlowTests
+        if environ.get("PC_INFO_LOCAL_WHEEL") == "1":
+            from tests.test_clickonce import ClickOnceTests as DemoTests
+        else:
+            from tests.test_flow import PcInfoFlowTests as DemoTests
     except ModuleNotFoundError as error:
         print(f"No se puede iniciar la automatización: {error}", file=sys.stderr)
         print("Consulta la preparación en demo/README.md.", file=sys.stderr)
         return 1
 
-    suite = unittest.defaultTestLoader.loadTestsFromTestCase(PcInfoFlowTests)
+    suite = unittest.defaultTestLoader.loadTestsFromTestCase(DemoTests)
     result = unittest.TextTestRunner(verbosity=2).run(suite)
     return 0 if result.wasSuccessful() else 1
 

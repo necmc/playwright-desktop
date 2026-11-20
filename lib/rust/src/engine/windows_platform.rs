@@ -1,6 +1,6 @@
 use super::{
     RequestState,
-    platform::{CapturePreparation, ControlAction, ControlQuery, ControlResult, Platform, ProviderSelection},
+    platform::{CapturePreparation, ControlAction, ControlQuery, ControlResult, Platform, ProviderSelection, WindowQuery},
 };
 use crate::{
     backend::{Backend, Target},
@@ -164,12 +164,9 @@ impl Platform for WindowsPlatform {
     type WindowKey = (isize, u32);
     type Provider = WindowsProvider;
 
-    fn candidates(&self, title: &str, pid: Option<u32>) -> Result<Vec<Self::Window>> {
-        if (title.is_empty() && pid.is_none()) || title.contains('\0') {
-            return Err(Failure::new("CONFIGURATION", "An exact window title or PID is required."));
-        }
+    fn candidates(&self, query: &WindowQuery) -> Result<Vec<Self::Window>> {
         Ok(windows::list()?.into_iter()
-            .filter(|window| (title.is_empty() || window.title == title) && pid.is_none_or(|pid| window.pid == pid))
+            .filter(|window| query.matches(&window.title, window.pid))
             .collect())
     }
 

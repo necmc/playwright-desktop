@@ -13,7 +13,6 @@ class InformationPage:
         self.computer_name = page.get_by_role("textbox", name="Nombre del equipo", exact=True)
         self.alias = page.get_by_role("textbox", name="Alias", exact=True)
         self.obtain_button = page.get_by_role("button", name="Obtener información", exact=True)
-        self.launch_link = page.get_by_role("link", name="Abrir aplicación", exact=True)
         self.status = page.get_by_role("status")
         self.pdf_viewer = page.get_by_title("Vista previa de la información confirmada", exact=True)
 
@@ -22,7 +21,6 @@ class InformationPage:
 
     def request_information(self) -> None:
         self.obtain_button.click()
-        self.launch_link.click()
 
     def wait_for_result(self) -> None:
         self.pdf_viewer.wait_for(state="visible")

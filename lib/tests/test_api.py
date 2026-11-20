@@ -17,9 +17,14 @@ class ApiTests(unittest.TestCase):
     def test_query_requires_a_title_or_a_positive_pid(self):
         self.assertEqual(WindowQuery("My window", 42).title, "My window")
         self.assertEqual(WindowQuery(None, 42).pid, 42)
+        self.assertEqual(WindowQuery(None, 42, "Opciones").title_prefix, "Opciones")
         for title, pid in ((None, None), ("", 42), ("My window", 0), ("My window", True)):
             with self.assertRaises(ValueError):
                 WindowQuery(title, pid)
+        with self.assertRaisesRegex(ValueError, "title or title_prefix"):
+            WindowQuery("Opciones", 42, "Opciones")
+        with self.assertRaisesRegex(ValueError, "title_prefix"):
+            WindowQuery(None, 42, "")
 
     def test_only_supported_control_roles_and_nonempty_names_are_accepted(self):
         validate_control("textbox", "Alias")

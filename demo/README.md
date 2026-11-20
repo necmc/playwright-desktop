@@ -25,7 +25,7 @@ py demo/pc-info-automation/run.py
 
 ### Versión local
 
-Requiere Maturin, Rust MSVC y las herramientas C++ de Visual Studio.
+Prueba el clic de apertura con el navegador Chromium predeterminado compatible con Playwright. Validado en Edge y Chrome. Requiere Maturin, Rust MSVC y las herramientas C++ de Visual Studio.
 
 ```powershell
 .\demo\pc-info-automation\run_local.ps1

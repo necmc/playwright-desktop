@@ -13,9 +13,9 @@ impl Platform for FakePlatform {
     type WindowKey = u32;
     type Provider = &'static str;
 
-    fn candidates(&self, title: &str, pid: Option<u32>) -> Result<Vec<Self::Window>> {
+    fn candidates(&self, query: &WindowQuery) -> Result<Vec<Self::Window>> {
         Ok(self.windows.iter().copied()
-            .filter(|(id, name)| (title.is_empty() || *name == title) && pid.is_none_or(|pid| pid == *id))
+            .filter(|(id, name)| query.matches(name, *id))
             .collect())
     }
 
@@ -94,7 +94,7 @@ fn a_platform_adapter_can_capture_operate_and_release_a_window() {
     worker.platform.windows.push((1, "Opciones"));
 
     let (mut prepare, _) = command(request(owner.clone(), deadline), Operation::PrepareCapture, Arguments {
-        title: "Opciones".into(), ..Arguments::default()
+        window: WindowQuery { title: "Opciones".into(), ..WindowQuery::default() }, ..Arguments::default()
     });
     let capture_id = worker.step(&mut prepare).unwrap().unwrap().handle;
 
@@ -119,6 +119,24 @@ fn a_platform_adapter_can_capture_operate_and_release_a_window() {
         window_id, ..Arguments::default()
     });
     assert_eq!(worker.step(&mut closed).unwrap().unwrap().handle, window_id);
+}
+
+#[test]
+fn title_prefix_respects_pid_and_rejects_ambiguous_matches() {
+    let mut worker = test_worker();
+    let state = request(session(1), Instant::now() + Duration::from_secs(1));
+    worker.platform.windows = vec![(1, "Informe - Perfil A"), (2, "Informe - Perfil B")];
+    let mut query = WindowQuery { title_prefix: "Informe".into(), ..WindowQuery::default() };
+
+    let ambiguous = worker.discover(&state, &query, None).unwrap_err();
+    assert_eq!(ambiguous.code, "AMBIGUOUS");
+    query.pid = Some(2);
+    let id = worker.discover(&state, &query, None).unwrap().unwrap();
+    assert_eq!(worker.windows[&id].window, (2, "Informe - Perfil B"));
+
+    query.title = "Informe".into();
+    query.title_prefix.clear();
+    assert!(worker.discover(&state, &query, None).unwrap().is_none());
 }
 
 #[test]
@@ -227,7 +245,7 @@ fn cancelling_a_queued_preparation_after_reservation_releases_it_before_the_next
     let abandoned = request(owner, deadline);
     let next = request(other, deadline);
     let (prepare, first_reply) = command(abandoned.clone(), Operation::PrepareCapture, Arguments {
-        title: "First queued capture".into(), ..Arguments::default()
+        window: WindowQuery { title: "First queued capture".into(), ..WindowQuery::default() }, ..Arguments::default()
     });
     let mut pending = VecDeque::from([prepare]);
     worker.shared.queued.store(1, Ordering::Release);
@@ -238,7 +256,7 @@ fn cancelling_a_queued_preparation_after_reservation_releases_it_before_the_next
     // Cancellation arrives after the preparation ran, before another command in the queue.
     abandoned.cancel();
     let (prepare, second_reply) = command(next, Operation::PrepareCapture, Arguments {
-        title: "Second queued capture".into(), ..Arguments::default()
+        window: WindowQuery { title: "Second queued capture".into(), ..WindowQuery::default() }, ..Arguments::default()
     });
     pending.push_back(prepare);
     worker.shared.queued.store(1, Ordering::Release);

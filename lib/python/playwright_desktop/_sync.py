@@ -20,8 +20,10 @@ class Desktop:
     def set_default_timeout(self, timeout: float) -> None:
         self._session.set_default_timeout(timeout)
 
-    def window(self, *, title: str | None = None, pid: int | None = None) -> Window:
-        return Window(self._session, WindowQuery(title, pid))
+    def window(
+        self, *, title: str | None = None, pid: int | None = None, title_prefix: str | None = None,
+    ) -> Window:
+        return Window(self._session, WindowQuery(title, pid, title_prefix))
 
     def expect_window(self, *, title: str, pid: int | None = None, timeout: float | None = None) -> WindowExpectation:
         validate_string(title, "title")
@@ -51,7 +53,8 @@ class Window:
 
     def _call(self, operation, timeout=None, **parameters):
         reply = self._session.call(operation, window_id=self._handle, title=self._query.title or "",
-                                   pid=self._query.pid, timeout=timeout, **parameters)
+                                   pid=self._query.pid, title_prefix=self._query.title_prefix or "",
+                                   timeout=timeout, **parameters)
         if reply.handle:
             self._handle = reply.handle
         return reply

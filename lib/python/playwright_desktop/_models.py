@@ -25,16 +25,21 @@ def validate_timeout(value: float) -> float:
 class WindowQuery:
     title: str | None
     pid: int | None = None
+    title_prefix: str | None = None
 
     def __post_init__(self):
         if self.pid is not None and (
             isinstance(self.pid, bool) or not isinstance(self.pid, int) or not 0 < self.pid <= MAX_PROCESS_ID
         ):
             raise ValueError("pid must be a positive process identifier.")
+        if self.title is not None and self.title_prefix is not None:
+            raise ValueError("Use either title or title_prefix.")
         if self.title is not None:
             validate_string(self.title, "title")
+        elif self.title_prefix is not None:
+            validate_string(self.title_prefix, "title_prefix")
         elif self.pid is None:
-            raise ValueError("A window title or PID is required.")
+            raise ValueError("A window title, title prefix or PID is required.")
 
 
 def validate_control(role: str, name: str) -> None:

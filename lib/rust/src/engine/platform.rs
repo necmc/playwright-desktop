@@ -25,6 +25,31 @@ pub(crate) struct ControlResult {
     pub(crate) text: Option<String>,
 }
 
+#[derive(Clone, Default)]
+pub(super) struct WindowQuery {
+    pub(super) title: String,
+    pub(super) pid: Option<u32>,
+    pub(super) title_prefix: String,
+}
+
+impl WindowQuery {
+    pub(super) fn validate(&self) -> Result<()> {
+        if (!self.title.is_empty() && !self.title_prefix.is_empty())
+            || self.title.contains('\0') || self.title_prefix.contains('\0')
+            || (self.title.is_empty() && self.title_prefix.is_empty() && self.pid.is_none())
+        {
+            return Err(Failure::new("CONFIGURATION", "Use an exact title, a title prefix or a PID. Do not combine the two title filters."));
+        }
+        Ok(())
+    }
+
+    pub(super) fn matches(&self, title: &str, pid: u32) -> bool {
+        self.pid.is_none_or(|expected| expected == pid)
+            && (self.title.is_empty() || self.title == title)
+            && title.starts_with(self.title_prefix.as_str())
+    }
+}
+
 pub(super) struct CapturePreparation {
     pub(super) result: Receiver<Result<()>>,
     pub(super) until: Option<Instant>,
@@ -44,7 +69,7 @@ pub(super) trait Platform {
     type WindowKey: Clone + Eq + Hash;
     type Provider: Copy;
 
-    fn candidates(&self, title: &str, pid: Option<u32>) -> Result<Vec<Self::Window>>;
+    fn candidates(&self, query: &WindowQuery) -> Result<Vec<Self::Window>>;
     fn window_key(&self, window: &Self::Window) -> Self::WindowKey;
     fn is_window_alive(&self, window: &Self::Window) -> bool;
     fn prepare_capture(&mut self, request: Arc<RequestState>) -> Result<Option<CapturePreparation>>;

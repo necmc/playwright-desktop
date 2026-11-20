@@ -45,6 +45,8 @@ Con Playwright asíncrono, usa `async with` y `await` en las acciones.
 
 Para una ventana que ya está abierta, usa `page.desktop.window(title="Opciones")`. Si conoces el PID y el proceso tiene una sola ventana visible con título, usa `page.desktop.window(pid=pid)`.
 
+Si el título añade un sufijo variable, usa `page.desktop.window(pid=pid, title_prefix="Opciones")`. El resultado debe identificar una sola ventana.
+
 ## Guardar la ventana
 
 Si necesitas usar la ventana como objeto, recupérala con `.value` al salir de `with`.
