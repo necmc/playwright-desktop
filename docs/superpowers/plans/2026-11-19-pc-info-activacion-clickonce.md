@@ -10,7 +10,7 @@
 
 **Referencias.** [Diseño de pc-info](../specs/2026-11-17-demo-clickonce-java-design.md) y [caso CP-PI-01](../../../demo/pc-info-automation/test_plan.md#caso-cp-pi-01--confirmar-datos-y-generar-el-pdf).
 
-**Estado.** En validación. Con el wheel de desarrollo, CP-PI-01 pulsa **Abrir** en Edge y **Ejecutar** en el aviso de ClickOnce de la demo. La prueba continúa esperando la ventana Java, que aún no aparece dentro del plazo.
+**Estado.** En validación. CP-PI-01 pulsa **Abrir** en Edge y **Ejecutar** en ClickOnce. La apertura de Java y la validación del PDF siguen pendientes.
 
 ## Tarea 1 — clic de apertura desde el navegador
 
@@ -43,7 +43,8 @@ Los dos comandos de la demo ejecutan CP-PI-01 mediante `run.py`. La validación 
 - [x] Registrar que CP-PI-01 llegó a **Ejecución de la aplicación - Advertencia de seguridad** de ClickOnce después del aviso de Edge.
 - [x] Identificar el aviso nuevo por su título y verificar que muestra **Información del equipo** y el origen de la demo. El wheel de desarrollo acciona **Ejecutar** cuando ambos coinciden.
 - [ ] Verificar el recorrido cuando ClickOnce omite la confirmación.
-- [ ] Registrar un bloqueo separado si aparece Microsoft Defender SmartScreen. [Reputación de SmartScreen](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/smartscreen-reputation).
+
+Si aparece SScreen, revisa el proceso de automatización.
 
 ## Criterio de cierre
 

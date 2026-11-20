@@ -12,6 +12,8 @@ Usa una sesión interactiva de Windows con Microsoft Edge y ClickOnce habilitado
 
 Registra el caso como **bloqueado por el entorno** si la web no responde, Edge no está instalado o un aviso de seguridad impide abrir Java.
 
+Si aparece SScreen, revisa el proceso de automatización.
+
 ## Caso CP-PI-01 · Confirmar datos y generar el PDF
 
 Datos de prueba: fecha `2026-11-19`, equipo `EQUIPO-CLICKONCE` y alias `Integración Ñ`. El alias permite detectar pérdida de caracteres durante el recorrido.
@@ -39,7 +41,7 @@ Verificación independiente que requiere una versión con soporte nativo de Wind
 | `run.py` | Verifica la disponibilidad de la demo y ejecuta CP-PI-01. |
 | `tests/test_flow.py` | Define el recorrido y sus resultados esperados. Captura la ventana con `page.desktop.expect_window()` y la entrega al Page Object con `opened.value`. |
 | `tests/test_clickonce.py` | Contiene la verificación independiente del clic de apertura en Edge. |
-| `pages/` | Contiene los objetos de la web, del aviso del navegador, del instalador y del formulario Java. |
+| `pages/` | Contiene los objetos de la web, de los avisos de apertura y seguridad, y del formulario Java. |
 | `models/` | Contiene `EquipmentInformation`, el DTO con los tres datos que se comparan a lo largo del flujo. |
 | `fixtures/` | Abre Edge con un perfil temporal y libera los recursos de cada prueba. |
 | `utils/` | Extrae el texto del PDF para comprobar su contenido. |

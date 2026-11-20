@@ -1,3 +1,7 @@
+---
+trigger: always_on
+---
+
 # Regla de Notificaciones Push (Telegram)
 
 Debes utilizar el script de notificaciones ubicado en `tools/notify.py` para alertar al usuario en su celular bajo **estrictamente las siguientes situaciones**:
