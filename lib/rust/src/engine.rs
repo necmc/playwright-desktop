@@ -160,6 +160,8 @@ impl Operation {
             "fill" => Ok(Self::Window(WindowOperation::Fill)),
             "click" => Ok(Self::Window(WindowOperation::Click)),
             "wait_closed" => Ok(Self::Window(WindowOperation::WaitClosed)),
+            "bring_to_front" => Ok(Self::Window(WindowOperation::BringToFront)),
+            "close_window" => Ok(Self::Window(WindowOperation::CloseWindow)),
             _ => Err(Failure::new("CONFIGURATION", "Unsupported native operation.")),
         }
     }
@@ -172,6 +174,8 @@ enum WindowOperation {
     Fill,
     Click,
     WaitClosed,
+    BringToFront,
+    CloseWindow,
 }
 
 struct Command<P> {
@@ -197,6 +201,7 @@ enum PendingCall<P: Platform> {
     Discover { operation: WindowOperation, result: Receiver<Result<Vec<P::Window>>> },
     ResolveProvider { id: u64, result: Receiver<Result<P::Provider>>, until: Instant, fallback: P::Provider },
     Action { id: u64, result: Receiver<Result<Option<ControlResult>>> },
+    Closing { id: u64 },
 }
 
 #[pyclass]
@@ -594,6 +599,7 @@ impl<P: Platform> Worker<P> {
                     }
                 }
             }
+            PendingCall::Closing { id } => self.poll_closing(command, id),
         }
     }
 
@@ -655,18 +661,24 @@ impl<P: Platform> Worker<P> {
     fn act_on_window(&mut self, command: &mut ActiveCommand<P>, id: u64, operation: WindowOperation) -> Result<Option<Reply>> {
         let request = &command.request;
         let session = request.session.id;
-        let waiting_for_close = operation == WindowOperation::WaitClosed;
-        if waiting_for_close && self.closed.get(&id) == Some(&session) {
+        let tolerates_closed = matches!(operation, WindowOperation::WaitClosed | WindowOperation::CloseWindow);
+        if tolerates_closed && self.closed.get(&id) == Some(&session) {
             return Ok(Some(Reply::handle(id)));
         }
         let item = self.window(id, session)?;
         if !self.platform.is_window_alive(&item.window) {
             self.invalidate_window(id);
-            if waiting_for_close { return Ok(Some(Reply::handle(id))); }
+            if tolerates_closed { return Ok(Some(Reply::handle(id))); }
             return Err(Failure::new("STALE", "The native window no longer exists."));
         }
-        if waiting_for_close {
-            return Ok(None);
+        match operation {
+            WindowOperation::WaitClosed => return Ok(None),
+            WindowOperation::BringToFront => {
+                self.platform.bring_to_front(&item.window)?;
+                return Ok(Some(self.reply_for_window(id, None)));
+            }
+            WindowOperation::CloseWindow => return self.begin_close(command, id),
+            _ => {}
         }
         if let Some(provider) = item.provider {
             return self.dispatch(command, id, provider);
@@ -679,6 +691,32 @@ impl<P: Platform> Worker<P> {
                 Ok(None)
             }
         }
+    }
+
+    fn begin_close(&mut self, command: &mut ActiveCommand<P>, id: u64) -> Result<Option<Reply>> {
+        command.request.begin_mutation()?;
+        let session = command.request.session.id;
+        let window = self.window(id, session)?.window.clone();
+        if !self.platform.post_close(&window)? {
+            self.invalidate_window(id);
+            return Ok(Some(Reply::handle(id)));
+        }
+        command.pending = Some(PendingCall::Closing { id });
+        Ok(None)
+    }
+
+    fn poll_closing(&mut self, command: &mut ActiveCommand<P>, id: u64) -> Result<Option<Reply>> {
+        let session = command.request.session.id;
+        if self.closed.get(&id) == Some(&session) {
+            return Ok(Some(Reply::handle(id)));
+        }
+        let item = self.window(id, session)?;
+        if !self.platform.is_window_alive(&item.window) {
+            self.invalidate_window(id);
+            return Ok(Some(Reply::handle(id)));
+        }
+        command.pending = Some(PendingCall::Closing { id });
+        Ok(None)
     }
 
     fn dispatch(&mut self, command: &mut ActiveCommand<P>, id: u64, provider: P::Provider) -> Result<Option<Reply>> {

@@ -81,6 +81,21 @@ class NativeTests(unittest.TestCase):
         self.assertEqual(error.exception.args[0], "CONFIGURATION")
         self.assertIn("Unsupported native operation", error.exception.args[1])
 
+    def test_bring_to_front_and_close_window_validate_handles_and_arguments(self):
+        session = self.engine.open_session(str(self.home))
+        self.addCleanup(self.engine.close_session, session)
+        for operation in ("bring_to_front", "close_window"):
+            with self.subTest(operation=operation, case="stale"):
+                request = self.engine.new_request(session, 500)
+                with self.assertRaises(self.native.NativeError) as error:
+                    self.engine.invoke(request, operation, window_id=99999)
+                self.assertEqual(error.exception.args[0], "STALE")
+            with self.subTest(operation=operation, case="missing_query"):
+                request = self.engine.new_request(session, 500)
+                with self.assertRaises(self.native.NativeError) as error:
+                    self.engine.invoke(request, operation)
+                self.assertEqual(error.exception.args[0], "CONFIGURATION")
+
 
 if __name__ == "__main__":
     unittest.main()

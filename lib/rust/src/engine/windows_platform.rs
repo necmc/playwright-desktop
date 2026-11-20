@@ -210,6 +210,14 @@ impl Platform for WindowsPlatform {
         windows::valid(window)
     }
 
+    fn bring_to_front(&self, window: &Self::Window) -> Result<()> {
+        windows::bring_to_front(window)
+    }
+
+    fn post_close(&self, window: &Self::Window) -> Result<bool> {
+        windows::post_close(window)
+    }
+
     fn prepare_capture(&mut self, request: Arc<RequestState>) -> Result<Option<CapturePreparation>> {
         if !request.session.options.automatic {
             let result = self.java()?.submit(request, |state, request| {

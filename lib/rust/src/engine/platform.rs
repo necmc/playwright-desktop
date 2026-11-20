@@ -102,6 +102,8 @@ pub(super) trait Platform {
     fn window_key(&self, window: &Self::Window) -> Self::WindowKey;
     fn window_metadata(&self, window: &Self::Window) -> (u32, String);
     fn is_window_alive(&self, window: &Self::Window) -> bool;
+    fn bring_to_front(&self, window: &Self::Window) -> Result<()>;
+    fn post_close(&self, window: &Self::Window) -> Result<bool>;
     fn prepare_capture(&mut self, request: Arc<RequestState>) -> Result<Option<CapturePreparation>>;
     fn resolve_provider(
         &mut self, request: Arc<RequestState>, window: Self::Window,

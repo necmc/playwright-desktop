@@ -1,12 +1,13 @@
 use crate::error::{Failure, Result};
-use ::windows::Win32::Foundation::{CloseHandle, HWND, LPARAM};
+use ::windows::Win32::Foundation::{CloseHandle, HWND, LPARAM, WPARAM};
 use ::windows::Win32::System::Threading::{
     OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
 };
 use ::windows::Win32::UI::WindowsAndMessaging::{
-    DispatchMessageW, EnumWindows, GetWindowTextLengthW, GetWindowTextW,
-    GetWindowThreadProcessId, IsWindow, IsWindowVisible, MSG, PM_REMOVE,
-    PeekMessageW, TranslateMessage,
+    BringWindowToTop, DispatchMessageW, EnumWindows, GetWindowTextLengthW, GetWindowTextW,
+    GetWindowThreadProcessId, IsIconic, IsWindow, IsWindowVisible, MSG, PM_REMOVE,
+    PeekMessageW, PostMessageW, SW_RESTORE, SetForegroundWindow, ShowWindow, TranslateMessage,
+    WM_CLOSE,
 };
 use ::windows::core::{BOOL, PWSTR};
 use std::path::PathBuf;
@@ -35,6 +36,35 @@ pub fn valid(window: &Window) -> bool {
             && GetWindowThreadProcessId(hwnd(window.hwnd), Some(&mut pid)) != 0
             && pid == window.pid
     }
+}
+
+pub(crate) fn bring_to_front(window: &Window) -> Result<()> {
+    if !valid(window) {
+        return Err(Failure::new("STALE", "The native window no longer exists."));
+    }
+    let handle = hwnd(window.hwnd);
+    // SAFETY: handle is verified live for this PID immediately above.
+    unsafe {
+        if IsIconic(handle).as_bool() {
+            let _ = ShowWindow(handle, SW_RESTORE);
+        }
+        let _ = BringWindowToTop(handle);
+        let _ = SetForegroundWindow(handle);
+    }
+    if !valid(window) {
+        return Err(Failure::new("STALE", "The native window no longer exists."));
+    }
+    Ok(())
+}
+
+pub(crate) fn post_close(window: &Window) -> Result<bool> {
+    if !valid(window) {
+        return Ok(false);
+    }
+    // SAFETY: handle is verified live; WM_CLOSE requests a graceful close without forcing termination.
+    unsafe { PostMessageW(Some(hwnd(window.hwnd)), WM_CLOSE, WPARAM(0), LPARAM(0)) }
+        .map_err(|e| Failure::new("ACTION", format!("Cannot close native window: {e}")))?;
+    Ok(true)
 }
 
 fn executable_path(window: &Window) -> Option<PathBuf> {

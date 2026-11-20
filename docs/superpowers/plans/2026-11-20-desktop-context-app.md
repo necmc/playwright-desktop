@@ -76,17 +76,17 @@ git commit -m "feat(rust): soportar múltiples handles de ventana por sesión"
 **Contexto clave:**
 `Operation::parse` hoy solo reconoce `prepare`, `capture`, `wait_visible`, `read_text`, `fill`, `click`, `wait_closed`. Necesitamos implementar las primitivas nativas equivalentes a `page.bring_to_front()` y `page.close()` sobre cualquier HWND capturado.
 
-- [ ] **Step 1: Escribir tests para parsing/validación de `bring_to_front` y `close_window` en `engine.rs` y `test_native.py`**
+- [x] **Step 1: Escribir tests para parsing/validación de `bring_to_front` y `close_window` en `engine.rs` y `test_native.py`**
 
 1. En `lib/rust/src/engine.rs`: probar que `Operation::parse` acepta `"bring_to_front"` y `"close_window"` y que ambos requieren `window_id` válido o `WindowQuery` válido (rechazan argumentos inválidos si ambos faltan).
 2. En `lib/tests/test_native.py`: añadir prueba verificando error controlado (`StaleWindowError` / `NativeError("STALE", ...)`) cuando se llama `"bring_to_front"` sobre un handle inexistente, e idempotencia al llamar `"close_window"` sobre un handle ya cerrado si aplica o error esperado de argumento.
 
-- [ ] **Step 2: Ejecutar `cargo test` para verificar el fallo inicial**
+- [x] **Step 2: Ejecutar `cargo test` para verificar el fallo inicial**
 
 Run: `& 'lib/.tools/cargo/bin/cargo.exe' test --manifest-path lib/rust/Cargo.toml`
 Expected: FAIL porque aún no existen las variantes `BringToFront` y `CloseWindow`.
 
-- [ ] **Step 3: Implementar `bring_to_front` y `close_window` en `lib/rust/src/windows.rs` y `lib/rust/src/engine.rs`**
+- [x] **Step 3: Implementar `bring_to_front` y `close_window` en `lib/rust/src/windows.rs` y `lib/rust/src/engine.rs`**
 
 1. En `lib/rust/src/windows.rs`:
    - `pub(crate) fn bring_to_front(window: &Window) -> Result<()>`:
@@ -101,7 +101,7 @@ Expected: FAIL porque aún no existen las variantes `BringToFront` y `CloseWindo
    - `BringToFront`: resuelve el `Window` (por `window_id` o `WindowQuery`), llama `windows::bring_to_front(&window)` y retorna `Reply` vacío.
    - `CloseWindow`: resuelve el `Window` (por `window_id` si existe; si ya fue cerrado o no está en `handles`, retornar OK idempotente); si está abierto, llama `windows::post_close(&window)` y espera dentro del `deadline` del `Request` hasta `!windows::valid(&window)` usando el loop cooperativo existente (respetando cancelación y retornando `"TIMEOUT"` si la app bloqueó el cierre tras el timeout). Al confirmarse el cierre, remueve `window_id` de `self.handles`.
 
-- [ ] **Step 4: Compilar wheel local y correr tests Rust + `test_native.py`**
+- [x] **Step 4: Compilar wheel local y correr tests Rust + `test_native.py`**
 
 Run:
 ```powershell
@@ -110,7 +110,7 @@ lib/scripts/build_py.ps1
 ```
 Expected: `cargo test` PASS y `maturin build` genera el wheel en `lib/dist/python/` sin warnings/errores de compilación.
 
-- [ ] **Step 5: Commit de las operaciones Win32**
+- [x] **Step 5: Commit de las operaciones Win32**
 
 ```bash
 git add lib/rust/src/windows.rs lib/rust/src/engine.rs lib/tests/test_native.py

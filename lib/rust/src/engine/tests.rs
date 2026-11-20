@@ -1,5 +1,5 @@
 use super::*;
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 
 #[derive(Default)]
 struct FakePlatform {
@@ -7,6 +7,8 @@ struct FakePlatform {
     pending_windows: Option<Vec<(u32, &'static str)>>,
     actions: usize,
     released: Cell<Option<u64>>,
+    brought_to_front: RefCell<Vec<u32>>,
+    close_requests: RefCell<Vec<u32>>,
 }
 
 impl Platform for FakePlatform {
@@ -44,6 +46,22 @@ impl Platform for FakePlatform {
 
     fn is_window_alive(&self, window: &Self::Window) -> bool {
         self.windows.contains(window)
+    }
+
+    fn bring_to_front(&self, window: &Self::Window) -> Result<()> {
+        if !self.is_window_alive(window) {
+            return Err(Failure::new("STALE", "The native window no longer exists."));
+        }
+        self.brought_to_front.borrow_mut().push(window.0);
+        Ok(())
+    }
+
+    fn post_close(&self, window: &Self::Window) -> Result<bool> {
+        if !self.is_window_alive(window) {
+            return Ok(false);
+        }
+        self.close_requests.borrow_mut().push(window.0);
+        Ok(true)
     }
 
     fn prepare_capture(&mut self, _: Arc<RequestState>) -> Result<Option<CapturePreparation>> {
@@ -396,4 +414,65 @@ fn same_session_can_hold_multiple_handles_with_metadata_while_blocking_other_ses
         window: WindowQuery { title: "Otra".into(), ..WindowQuery::default() }, ..Arguments::default()
     });
     assert!(worker.step(&mut unblocked).unwrap().is_some());
+}
+
+#[test]
+fn bring_to_front_and_close_window_coordinate_lifecycle_without_duplicate_close_signals() {
+    assert!(matches!(Operation::parse("bring_to_front"), Ok(Operation::Window(WindowOperation::BringToFront))));
+    assert!(matches!(Operation::parse("close_window"), Ok(Operation::Window(WindowOperation::CloseWindow))));
+
+    let mut worker = test_worker();
+    let owner = session(1);
+    worker.shared.sessions.lock().unwrap().insert(owner.id, owner.clone());
+    let deadline = Instant::now() + Duration::from_secs(10);
+
+    let (mut prep, _) = command(request(owner.clone(), deadline), Operation::PrepareCapture, Arguments {
+        window: WindowQuery::default(), ..Arguments::default()
+    });
+    let cap = worker.step(&mut prep).unwrap().unwrap().handle;
+    worker.platform.windows.push((101, "App Principal"));
+    let (mut comp, _) = command(request(owner.clone(), deadline), Operation::CompleteCapture, Arguments {
+        capture_id: cap, ..Arguments::default()
+    });
+    let app = worker.step(&mut comp).unwrap().unwrap();
+
+    // bring_to_front activa el handle vivo y conserva metadatos en Reply.
+    let (mut front, _) = command(request(owner.clone(), deadline), Operation::Window(WindowOperation::BringToFront), Arguments {
+        window_id: app.handle, ..Arguments::default()
+    });
+    let front_reply = worker.step(&mut front).unwrap().unwrap();
+    assert_eq!(front_reply.handle, app.handle);
+    assert_eq!(front_reply.pid, Some(101));
+    assert_eq!(*worker.platform.brought_to_front.borrow(), vec![101]);
+
+    // close_window envía WM_CLOSE una sola vez y espera cooperativamente hasta que la ventana desaparezca.
+    let (mut close, _) = command(request(owner.clone(), deadline), Operation::Window(WindowOperation::CloseWindow), Arguments {
+        window_id: app.handle, ..Arguments::default()
+    });
+    assert!(worker.step(&mut close).unwrap().is_none());
+    assert!(worker.step(&mut close).unwrap().is_none());
+    assert_eq!(*worker.platform.close_requests.borrow(), vec![101]);
+
+    worker.platform.windows.retain(|(id, _)| *id != 101);
+    let closed_reply = worker.step(&mut close).unwrap().unwrap();
+    assert_eq!(closed_reply.handle, app.handle);
+    assert!(!worker.windows.contains_key(&app.handle));
+
+    // Llamar close_window otra vez sobre el mismo handle ya cerrado es idempotente.
+    let (mut close_again, _) = command(request(owner.clone(), deadline), Operation::Window(WindowOperation::CloseWindow), Arguments {
+        window_id: app.handle, ..Arguments::default()
+    });
+    assert_eq!(worker.step(&mut close_again).unwrap().unwrap().handle, app.handle);
+    assert_eq!(*worker.platform.close_requests.borrow(), vec![101]);
+
+    // En cambio bring_to_front sobre el handle cerrado o close_window de un handle desconocido falla con STALE.
+    let (mut stale_front, _) = command(request(owner.clone(), deadline), Operation::Window(WindowOperation::BringToFront), Arguments {
+        window_id: app.handle, ..Arguments::default()
+    });
+    assert_eq!(worker.step(&mut stale_front).unwrap_err().code, "STALE");
+
+    let (mut unknown_close, _) = command(request(owner, deadline), Operation::Window(WindowOperation::CloseWindow), Arguments {
+        window_id: 99999, ..Arguments::default()
+    });
+    assert_eq!(worker.step(&mut unknown_close).unwrap_err().code, "STALE");
 }
