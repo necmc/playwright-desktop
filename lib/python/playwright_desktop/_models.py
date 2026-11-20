@@ -1,6 +1,7 @@
 """Validation shared by synchronous and asynchronous facades."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Any, Callable
 
 MAX_TIMEOUT_MS = 2**32 - 1
 MAX_PROCESS_ID = 2**32 - 1
@@ -27,6 +28,7 @@ class WindowQuery:
     pid: int | None = None
     title_prefix: str | None = None
     has_text: str | None = None
+    allow_empty: bool = field(default=False, repr=False, compare=False)
 
     def __post_init__(self):
         if self.pid is not None and (
@@ -41,8 +43,38 @@ class WindowQuery:
             validate_string(self.title_prefix, "title_prefix")
         if self.has_text is not None:
             validate_string(self.has_text, "has_text")
-        if self.title is None and self.title_prefix is None and self.pid is None and self.has_text is None:
+        if not self.allow_empty and (
+            self.title is None and self.title_prefix is None and self.pid is None and self.has_text is None
+        ):
             raise ValueError("A window title, title prefix, PID or visible text is required.")
+
+    @classmethod
+    def capture(
+        cls,
+        *,
+        title: str | None = None,
+        pid: int | None = None,
+        title_prefix: str | None = None,
+        has_text: str | None = None,
+    ) -> "WindowQuery":
+        return cls(
+            title=title, pid=pid, title_prefix=title_prefix, has_text=has_text, allow_empty=True,
+        )
+
+
+def query_parameters(query: WindowQuery) -> dict[str, Any]:
+    return {
+        "title": query.title or "",
+        "pid": query.pid,
+        "title_prefix": query.title_prefix or "",
+        "has_text": query.has_text or "",
+    }
+
+
+def validate_predicate(predicate: Callable[[Any], bool] | None) -> Callable[[Any], bool] | None:
+    if predicate is not None and not callable(predicate):
+        raise ValueError("predicate must be callable.")
+    return predicate
 
 
 def validate_control(role: str, name: str) -> None:

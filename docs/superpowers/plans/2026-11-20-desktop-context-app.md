@@ -134,19 +134,19 @@ Hoy `_patch.py` inyecta `DesktopAccessor` en `Page.desktop`, y `_runtime.py` aso
 1. Mover la propiedad del ciclo de vida al `BrowserContext` (`page.context`), manteniendo `WeakKeyDictionary[BrowserContext, Session]`.
 2. Retirar `Page.desktop` por completo e inyectar el método `expect_app` en `SyncPage` y `AsyncPage` (`_patch.py`), además de exponer `configure(java_home=..., timeout=...)` a nivel de paquete (`__init__.py`) para configuración previa opcional.
 
-- [ ] **Step 1: Actualizar `lib/tests/test_patch.py` con las expectativas del nuevo contrato (TDD)**
+- [x] **Step 1: Actualizar `lib/tests/test_patch.py` con las expectativas del nuevo contrato (TDD)**
 
 Actualizar `FakePage` agregando `FakeContext` (`self.context = context or FakeContext()`, con `.on(event, callback)`, `.is_closed()` y `.close()` disparando `"close"`). Probar que:
 1. `install()` agrega `"expect_app"` a `SyncPage` y `AsyncPage`, y **NO** agrega `"desktop"`.
 2. Colisión (`PatchConflictError`), rollback en falla parcial, idempotencia de `reload`, `uninstall()`, y carga perezosa de `_native` siguen cumpliéndose igual para `"expect_app"`.
 3. `Session` / `DesktopContext` se comparte entre `page1` y `page2` del **mismo** `FakeContext`, no muere al cerrarse `page1` si el `BrowserContext` sigue vivo, y sí se cierra al ejecutarse `context.callbacks["close"]()` o recolectarse el `BrowserContext` (`weakref`).
 
-- [ ] **Step 2: Ejecutar `test_patch.py` para verificar fallo esperado**
+- [x] **Step 2: Ejecutar `test_patch.py` para verificar fallo esperado**
 
 Run: `py -m unittest discover -s lib/tests -p "test_patch.py" -v` (ajustando `PYTHONPATH=lib/python` si corresponde).
 Expected: FAIL mientras `_patch.py` y `_runtime.py` sigan usando `desktop` y `Page`.
 
-- [ ] **Step 3: Refactorizar `_runtime.py`, `_models.py`, `_patch.py`, `__init__.py` y `typing.py`**
+- [x] **Step 3: Refactorizar `_runtime.py`, `_models.py`, `_patch.py`, `__init__.py` y `typing.py`** *(Nota: `typing.py` y exports de `DesktopContext`/`App`/`Window`/`Alert` en `__init__.py` cierran en Task 4 al crear esas clases)*
 
 1. **`lib/python/playwright_desktop/_models.py`:**
    - Permitir que `WindowQuery` acepte filtro `predicate` separado en capa Python o query completamente abierta cuando `expect_app()` / `expect_window()` / `expect_alert()` se llama sin criterios declarativos (evaluando cualquier ventana nueva capturada en el backend o adaptando `WindowQuery.optional(...)` para `expect_*` sin filtros). Mantener validación estricta para `dcontext.app(...)` directo.
@@ -167,12 +167,12 @@ Expected: FAIL mientras `_patch.py` y `_runtime.py` sigan usando `desktop` y `Pa
    - Exportar `DesktopContext`, `App`, `Window`, `Alert` (además de `configure`, `install`, `uninstall`, y los errores públicos).
    - Actualizar `typing.py` con `HasExpectApp` / `HasAsyncExpectApp` si los usuarios usan tipado estructural.
 
-- [ ] **Step 4: Ejecutar `test_patch.py` y verificar PASS**
+- [x] **Step 4: Ejecutar `test_patch.py` y verificar PASS**
 
 Run: `$env:PYTHONPATH="lib/python"; py -m unittest lib/tests/test_patch.py -v`
 Expected: PASS en todos los casos de parcheo, colisión, rollback, carga perezosa y ciclo de vida en `BrowserContext`.
 
-- [ ] **Step 5: Commit de runtime, parche y modelos**
+- [x] **Step 5: Commit de runtime, parche y modelos**
 
 ```bash
 git add lib/python/playwright_desktop/_runtime.py lib/python/playwright_desktop/_patch.py lib/python/playwright_desktop/_models.py lib/python/playwright_desktop/__init__.py lib/python/playwright_desktop/typing.py lib/tests/test_patch.py

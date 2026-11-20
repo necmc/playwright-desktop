@@ -1,4 +1,4 @@
-"""Lazy binding access. Playwright objects never cross the native worker boundary."""
+"""Lazy binding access and BrowserContext-scoped desktop session lifecycle."""
 
 import asyncio
 from contextlib import contextmanager
@@ -13,7 +13,7 @@ from ._errors import (
     DesktopTimeoutError,
     NATIVE_ERRORS,
 )
-from ._models import WindowQuery, validate_timeout
+from ._models import validate_timeout
 from ._timing import DEFAULT_TIMEOUT_MS, Deadline
 
 _BINDING_TIMEOUT = "The desktop request timed out while initializing its binding."
@@ -21,6 +21,58 @@ _BINDING_TIMEOUT = "The desktop request timed out while initializing its binding
 _lock = Lock()
 _engine = None
 _native_error = None
+
+_config_lock = Lock()
+_default_java_home: str | None = None
+_default_timeout: float = DEFAULT_TIMEOUT_MS
+
+_sessions_lock = Lock()
+_sessions: weakref.WeakKeyDictionary[object, "Session"] = weakref.WeakKeyDictionary()
+_facades: weakref.WeakKeyDictionary["Session", dict[str, object]] = weakref.WeakKeyDictionary()
+
+
+def configure(*, java_home=None, timeout: float | None = None) -> None:
+    """Configure defaults applied to newly opened BrowserContext-scoped desktop sessions."""
+    global _default_java_home, _default_timeout
+    if java_home is None and timeout is None:
+        raise ValueError("Specify java_home and/or timeout.")
+    normalized_java = _backend.normalize_java_home(java_home) if java_home is not None else None
+    validated_timeout = validate_timeout(timeout) if timeout is not None else None
+    with _config_lock:
+        if normalized_java is not None:
+            _default_java_home = normalized_java
+        if validated_timeout is not None:
+            _default_timeout = validated_timeout
+
+
+def reset_defaults() -> None:
+    global _default_java_home, _default_timeout
+    with _config_lock:
+        _default_java_home = None
+        _default_timeout = DEFAULT_TIMEOUT_MS
+
+
+def session_for_context(browser_context) -> "Session":
+    """Return the active desktop Session correlated 1:1 with a Playwright BrowserContext."""
+    if hasattr(browser_context, "is_closed") and browser_context.is_closed():
+        raise DesktopClosedError("The parent Playwright BrowserContext is closed.")
+    with _sessions_lock:
+        session = _sessions.get(browser_context)
+        if session is None or session.is_closed():
+            session = Session(browser_context)
+            _sessions[browser_context] = session
+        return session
+
+
+def context_facade(session: "Session", mode: str, factory):
+    """Return a single DesktopContext facade per (Session, mode) without strong context cycles."""
+    with _sessions_lock:
+        per_mode = _facades.setdefault(session, {})
+        facade = per_mode.get(mode)
+        if facade is None:
+            facade = factory(session)
+            per_mode[mode] = facade
+        return facade
 
 
 def _get_engine():
@@ -48,15 +100,16 @@ def _invoke(engine, request, operation, parameters):
 
 
 class Session:
-    def __init__(self, page):
-        self._page = weakref.ref(page)
+    def __init__(self, browser_context):
+        self._browser_context = weakref.ref(browser_context)
         self._thread = get_ident()
-        self._java_home = None
+        with _config_lock:
+            self._java_home = _default_java_home
+            self.default_timeout = _default_timeout
         self._engine = None
         self._id = None
         self._closed = False
-        self._captured_window: tuple[WindowQuery, int] | None = None
-        self.default_timeout = DEFAULT_TIMEOUT_MS
+        self._apps: dict[int, weakref.ref] = {}
         owner = weakref.ref(self)
 
         def on_close(*_):
@@ -64,15 +117,25 @@ class Session:
             if session is not None:
                 session.close_nowait()
 
-        page.on("close", on_close)
-        self._finalizer = weakref.finalize(page, self.close_nowait)
+        browser_context.on("close", on_close)
+        self._finalizer = weakref.finalize(browser_context, self.close_nowait)
+
+    @property
+    def browser_context(self):
+        context = self._browser_context()
+        if context is None or (hasattr(context, "is_closed") and context.is_closed()):
+            raise DesktopClosedError("The parent Playwright BrowserContext is closed.")
+        return context
+
+    def is_closed(self) -> bool:
+        context = self._browser_context()
+        return self._closed or context is None or (hasattr(context, "is_closed") and context.is_closed())
 
     def _check_owner(self):
         if get_ident() != self._thread:
-            raise DesktopError("Use this desktop facade on the same thread as its Playwright Page.")
-        page = self._page()
-        if self._closed or page is None or page.is_closed():
-            raise DesktopClosedError("The desktop session or its Playwright Page is closed.")
+            raise DesktopError("Use this DesktopContext on the same thread as its Playwright BrowserContext.")
+        if self.is_closed():
+            raise DesktopClosedError("The DesktopContext or its Playwright BrowserContext is closed.")
 
     def configure(self, *, java_home):
         self._check_owner()
@@ -87,15 +150,24 @@ class Session:
     def timeout(self, timeout):
         return self.default_timeout if timeout is None else validate_timeout(timeout)
 
-    def bind_captured_window(self, query: WindowQuery, handle: int) -> None:
-        self._check_owner()
-        self._captured_window = (query, handle)
+    def register_app(self, handle: int, app) -> None:
+        self._apps[handle] = weakref.ref(app)
 
-    def require_captured_window(self) -> tuple[WindowQuery, int]:
-        self._check_owner()
-        if self._captured_window is None:
-            raise DesktopConfigurationError("Capture a window with page.desktop.expect_window() first.")
-        return self._captured_window
+    def unregister_app(self, handle: int) -> None:
+        self._apps.pop(handle, None)
+
+    def tracked_apps(self) -> tuple:
+        live = []
+        stale = []
+        for handle, ref in self._apps.items():
+            item = ref()
+            if item is None:
+                stale.append(handle)
+            else:
+                live.append(item)
+        for handle in stale:
+            self._apps.pop(handle, None)
+        return tuple(live)
 
     def _open_session(self, engine, backend_argument: str | None) -> None:
         self._id = _native_call(engine.open_auto_session, backend_argument, explicit=self._java_home is not None)
@@ -145,12 +217,18 @@ class Session:
             raise
 
     def cancel_capture(self, capture_id):
-        if self._engine is not None:
+        if self._engine is not None and not self._closed:
             self._engine.cancel_capture(self._id, capture_id)
 
     def close_nowait(self):
         if not self._closed:
             self._closed = True
-            self._captured_window = None
+            self._apps.clear()
+            context = self._browser_context()
+            if context is not None:
+                with _sessions_lock:
+                    if _sessions.get(context) is self:
+                        del _sessions[context]
+                    _facades.pop(self, None)
             if self._engine is not None:
                 self._engine.close_session(self._id)

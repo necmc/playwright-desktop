@@ -8,11 +8,12 @@ from ._errors import (
     PatchConflictError, StaleWindowError, UnsupportedPlatformError,
 )
 from ._patch import install, uninstall
+from ._runtime import configure
 
 install()
 
 __all__ = [
-    "install", "uninstall", "DesktopError", "DesktopTimeoutError", "PatchConflictError",
+    "configure", "install", "uninstall", "DesktopError", "DesktopTimeoutError", "PatchConflictError",
     "DesktopConfigurationError", "BridgeUnavailableError", "AmbiguousMatchError",
     "StaleWindowError", "DesktopActionError", "DesktopBusyError", "DesktopClosedError",
     "UnsupportedPlatformError",
