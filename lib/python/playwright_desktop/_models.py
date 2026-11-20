@@ -23,9 +23,10 @@ def validate_timeout(value: float) -> float:
 
 @dataclass(frozen=True)
 class WindowQuery:
-    title: str | None
+    title: str | None = None
     pid: int | None = None
     title_prefix: str | None = None
+    has_text: str | None = None
 
     def __post_init__(self):
         if self.pid is not None and (
@@ -38,8 +39,10 @@ class WindowQuery:
             validate_string(self.title, "title")
         elif self.title_prefix is not None:
             validate_string(self.title_prefix, "title_prefix")
-        elif self.pid is None:
-            raise ValueError("A window title, title prefix or PID is required.")
+        if self.has_text is not None:
+            validate_string(self.has_text, "has_text")
+        if self.title is None and self.title_prefix is None and self.pid is None and self.has_text is None:
+            raise ValueError("A window title, title prefix, PID or visible text is required.")
 
 
 def validate_control(role: str, name: str) -> None:

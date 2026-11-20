@@ -18,6 +18,7 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(WindowQuery("My window", 42).title, "My window")
         self.assertEqual(WindowQuery(None, 42).pid, 42)
         self.assertEqual(WindowQuery(None, 42, "Opciones").title_prefix, "Opciones")
+        self.assertEqual(WindowQuery(has_text="Windows protegió su PC").has_text, "Windows protegió su PC")
         for title, pid in ((None, None), ("", 42), ("My window", 0), ("My window", True)):
             with self.assertRaises(ValueError):
                 WindowQuery(title, pid)
@@ -25,6 +26,8 @@ class ApiTests(unittest.TestCase):
             WindowQuery("Opciones", 42, "Opciones")
         with self.assertRaisesRegex(ValueError, "title_prefix"):
             WindowQuery(None, 42, "")
+        with self.assertRaisesRegex(ValueError, "has_text"):
+            WindowQuery(has_text="")
 
     def test_only_supported_control_roles_and_nonempty_names_are_accepted(self):
         validate_control("textbox", "Alias")
@@ -125,6 +128,16 @@ class ApiTests(unittest.TestCase):
 
         request.assert_called_once_with("prepare", title="Información del equipo", pid=None, timeout=50)
         cancel.assert_called_once_with(7)
+
+    def test_window_has_text_forwards_the_visible_text_filter(self):
+        page = FakePage()
+        session = Session(page)
+        desktop = Desktop(session)
+        with patch.object(session, "call", return_value=SimpleNamespace(handle=9)) as request:
+            desktop.window(has_text="Windows protegió su PC").get_by_role("link", name="Más información").click()
+        self.assertEqual(request.call_args.kwargs["has_text"], "Windows protegió su PC")
+        self.assertEqual(request.call_args.kwargs["title"], "")
+        self.assertEqual(request.call_args.kwargs["title_prefix"], "")
 
 
 if __name__ == "__main__":

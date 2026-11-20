@@ -22,8 +22,9 @@ class Desktop:
 
     def window(
         self, *, title: str | None = None, pid: int | None = None, title_prefix: str | None = None,
+        has_text: str | None = None,
     ) -> Window:
-        return Window(self._session, WindowQuery(title, pid, title_prefix))
+        return Window(self._session, WindowQuery(title, pid, title_prefix, has_text))
 
     def expect_window(self, *, title: str, pid: int | None = None, timeout: float | None = None) -> WindowExpectation:
         validate_string(title, "title")
@@ -54,7 +55,7 @@ class Window:
     def _call(self, operation, timeout=None, **parameters):
         reply = self._session.call(operation, window_id=self._handle, title=self._query.title or "",
                                    pid=self._query.pid, title_prefix=self._query.title_prefix or "",
-                                   timeout=timeout, **parameters)
+                                   has_text=self._query.has_text or "", timeout=timeout, **parameters)
         if reply.handle:
             self._handle = reply.handle
         return reply

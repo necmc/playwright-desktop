@@ -1,6 +1,9 @@
 use super::{
     RequestState,
-    platform::{CapturePreparation, ControlAction, ControlQuery, ControlResult, Platform, ProviderSelection, WindowQuery},
+    platform::{
+        CandidateSearch, CapturePreparation, ControlAction, ControlQuery, ControlResult, Platform,
+        ProviderSelection, WindowQuery,
+    },
 };
 use crate::{
     backend::{Backend, Target},
@@ -165,9 +168,34 @@ impl Platform for WindowsPlatform {
     type Provider = WindowsProvider;
 
     fn candidates(&self, query: &WindowQuery) -> Result<Vec<Self::Window>> {
-        Ok(windows::list()?.into_iter()
+        Ok(windows::list_for_query(query.allows_untitled())?.into_iter()
             .filter(|window| query.matches(&window.title, window.pid))
             .collect())
+    }
+
+    fn find_candidates(
+        &mut self, request: Arc<RequestState>, query: &WindowQuery,
+    ) -> Result<CandidateSearch<Self::Window>> {
+        let candidates = self.candidates(query)?;
+        if query.has_text.is_empty() || candidates.is_empty() {
+            return Ok(CandidateSearch::Ready(candidates));
+        }
+        let has_text = query.has_text.clone();
+        let receiver = self.uia()?.submit(request, move |state, request| {
+            let check = || request.check();
+            if state.client.is_none() {
+                state.client = Some(uia::Client::new()?);
+            }
+            let client = state.client.as_ref().unwrap();
+            let mut matched = Vec::new();
+            for window in candidates {
+                if client.contains_visible_text(&window, &has_text, &check)? {
+                    matched.push(window);
+                }
+            }
+            Ok(matched)
+        })?;
+        Ok(CandidateSearch::Pending(receiver))
     }
 
     fn window_key(&self, window: &Self::Window) -> Self::WindowKey {

@@ -31,24 +31,37 @@ pub(super) struct WindowQuery {
     pub(super) title: String,
     pub(super) pid: Option<u32>,
     pub(super) title_prefix: String,
+    pub(super) has_text: String,
 }
 
 impl WindowQuery {
     pub(super) fn validate(&self) -> Result<()> {
         if (!self.title.is_empty() && !self.title_prefix.is_empty())
-            || self.title.contains('\0') || self.title_prefix.contains('\0')
-            || (self.title.is_empty() && self.title_prefix.is_empty() && self.pid.is_none())
+            || self.title.contains('\0') || self.title_prefix.contains('\0') || self.has_text.contains('\0')
+            || (self.title.is_empty() && self.title_prefix.is_empty() && self.pid.is_none() && self.has_text.is_empty())
         {
-            return Err(Failure::new("CONFIGURATION", "Use an exact title, a title prefix or a PID. Do not combine the two title filters."));
+            return Err(Failure::new(
+                "CONFIGURATION",
+                "Use an exact title, a title prefix, a PID or visible text. Do not combine the two title filters.",
+            ));
         }
         Ok(())
+    }
+
+    pub(super) fn allows_untitled(&self) -> bool {
+        !self.has_text.is_empty() && self.title.is_empty() && self.title_prefix.is_empty()
     }
 
     pub(super) fn matches(&self, title: &str, pid: u32) -> bool {
         self.pid.is_none_or(|expected| expected == pid)
             && (self.title.is_empty() || self.title == title)
-            && title.starts_with(self.title_prefix.as_str())
+            && (self.title_prefix.is_empty() || title.starts_with(self.title_prefix.as_str()))
     }
+}
+
+pub(super) enum CandidateSearch<W> {
+    Ready(Vec<W>),
+    Pending(Receiver<Result<Vec<W>>>),
 }
 
 pub(super) struct CapturePreparation {
@@ -71,6 +84,11 @@ pub(super) trait Platform {
     type Provider: Copy;
 
     fn candidates(&self, query: &WindowQuery) -> Result<Vec<Self::Window>>;
+    fn find_candidates(
+        &mut self, _request: Arc<RequestState>, query: &WindowQuery,
+    ) -> Result<CandidateSearch<Self::Window>> {
+        self.candidates(query).map(CandidateSearch::Ready)
+    }
     fn window_key(&self, window: &Self::Window) -> Self::WindowKey;
     fn is_window_alive(&self, window: &Self::Window) -> bool;
     fn prepare_capture(&mut self, request: Arc<RequestState>) -> Result<Option<CapturePreparation>>;

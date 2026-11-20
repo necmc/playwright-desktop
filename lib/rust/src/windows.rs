@@ -59,20 +59,27 @@ pub(crate) fn has_java_launcher_name(window: &Window) -> bool {
     })
 }
 
+struct CollectState {
+    values: Vec<Window>,
+    include_untitled: bool,
+}
+
 unsafe extern "system" fn collect(handle: HWND, parameter: LPARAM) -> BOOL {
-    // SAFETY: EnumWindows invokes synchronously; parameter points to our live Vec.
+    // SAFETY: EnumWindows invokes synchronously; parameter points to our live CollectState.
     unsafe {
         if IsWindowVisible(handle).as_bool() {
+            let state = &mut *(parameter.0 as *mut CollectState);
             let length = GetWindowTextLengthW(handle);
-            if (1..32768).contains(&length) {
+            let mut pid = 0;
+            GetWindowThreadProcessId(handle, Some(&mut pid));
+            if length == 0 && state.include_untitled {
+                state.values.push(Window { hwnd: handle.0 as isize, pid, title: String::new() });
+            } else if (1..32768).contains(&length) {
                 let mut text = vec![0; length as usize + 1];
                 let read = GetWindowTextW(handle, &mut text);
-                let mut pid = 0;
-                GetWindowThreadProcessId(handle, Some(&mut pid));
                 if read > 0 && GetWindowTextLengthW(handle) <= read {
                     if let Ok(title) = String::from_utf16(&text[..read as usize]) {
-                        let values = &mut *(parameter.0 as *mut Vec<Window>);
-                        values.push(Window { hwnd: handle.0 as isize, pid, title });
+                        state.values.push(Window { hwnd: handle.0 as isize, pid, title });
                     }
                 }
             }
@@ -81,12 +88,12 @@ unsafe extern "system" fn collect(handle: HWND, parameter: LPARAM) -> BOOL {
     BOOL(1)
 }
 
-pub fn list() -> Result<Vec<Window>> {
-    let mut values = Vec::<Window>::new();
-    // SAFETY: collect only uses the Vec while this synchronous enumeration is active.
-    unsafe { EnumWindows(Some(collect), LPARAM(&mut values as *mut _ as isize)) }
+pub fn list_for_query(include_untitled: bool) -> Result<Vec<Window>> {
+    let mut state = CollectState { values: Vec::new(), include_untitled };
+    // SAFETY: collect only uses CollectState while this synchronous enumeration is active.
+    unsafe { EnumWindows(Some(collect), LPARAM(&mut state as *mut _ as isize)) }
         .map_err(|e| Failure::new("ACTION", format!("Cannot enumerate Windows windows: {e}")))?;
-    Ok(values)
+    Ok(state.values)
 }
 
 pub fn pump() {

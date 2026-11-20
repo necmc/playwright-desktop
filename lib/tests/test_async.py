@@ -230,6 +230,12 @@ class AsyncTests(unittest.IsolatedAsyncioTestCase):
                          ["prepare", "capture", "read_text", "click"])
         self.assertEqual([call.kwargs["window_id"] for call in invoke.call_args_list[2:]], [2, 2])
 
+    async def test_window_has_text_forwards_the_visible_text_filter_async(self):
+        self.engine.release.set()
+        with patch.object(self.engine, "invoke", return_value=SimpleNamespace(handle=3, text=None)) as invoke:
+            await self.desktop.window(has_text="Windows protegió su PC").get_by_role("link", name="Más información").click()
+        self.assertEqual(invoke.call_args.kwargs["has_text"], "Windows protegió su PC")
+
 
 if __name__ == "__main__":
     unittest.main()

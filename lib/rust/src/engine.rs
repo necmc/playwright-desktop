@@ -1,5 +1,5 @@
 use crate::error::{Failure, Result};
-use platform::{CapturePreparation, ControlQuery, Platform, ProviderSelection, WindowQuery};
+use platform::{CandidateSearch, CapturePreparation, ControlQuery, Platform, ProviderSelection, WindowQuery};
 pub(crate) use platform::{ControlAction, ControlResult};
 use pyo3::prelude::*;
 use std::{collections::{HashMap, HashSet, VecDeque}, path::Path,
@@ -178,15 +178,16 @@ type QueuedCommand = Command<()>;
 type ActiveCommand<P> = Command<Option<PendingCall<P>>>;
 
 impl QueuedCommand {
-    fn activate<P>(self) -> ActiveCommand<P> {
+    fn activate<P: Platform>(self) -> ActiveCommand<P> {
         let Self { request, operation, arguments, reply, pending: () } = self;
         Command { request, operation, arguments, reply, pending: None }
     }
 }
 
-enum PendingCall<P> {
+enum PendingCall<P: Platform> {
     PrepareCapture(CapturePreparation),
-    ResolveProvider { id: u64, result: Receiver<Result<P>>, until: Instant, fallback: P },
+    Discover { operation: WindowOperation, result: Receiver<Result<Vec<P::Window>>> },
+    ResolveProvider { id: u64, result: Receiver<Result<P::Provider>>, until: Instant, fallback: P::Provider },
     Action { id: u64, result: Receiver<Result<Option<ControlResult>>> },
 }
 
@@ -239,10 +240,11 @@ impl Engine {
         Ok(Request { state: Arc::new(RequestState::new(session, deadline, timeout_ms == 0)) })
     }
 
-    #[pyo3(signature = (request, operation, *, window_id=0, capture_id=0, title="", pid=None, role="", name="", text="", scope_role="", scope_name="", title_prefix=""))]
+    #[pyo3(signature = (request, operation, *, window_id=0, capture_id=0, title="", pid=None, role="", name="", text="", scope_role="", scope_name="", title_prefix="", has_text=""))]
     fn invoke(&self, py: Python<'_>, request: &Request, operation: &str,
               window_id: u64, capture_id: u64, title: &str, pid: Option<u32>,
-              role: &str, name: &str, text: &str, scope_role: &str, scope_name: &str, title_prefix: &str) -> PyResult<Reply> {
+              role: &str, name: &str, text: &str, scope_role: &str, scope_name: &str, title_prefix: &str,
+              has_text: &str) -> PyResult<Reply> {
         self.healthy().map_err(as_python)?;
         request.state.check().map_err(as_python)?;
         let operation = Operation::parse(operation).map_err(as_python)?;
@@ -255,7 +257,9 @@ impl Engine {
         let command = Command { request: state.clone(), operation,
             arguments: Arguments {
                 window_id, capture_id, text: text.into(),
-                window: WindowQuery { title: title.into(), pid, title_prefix: title_prefix.into() },
+                window: WindowQuery {
+                    title: title.into(), pid, title_prefix: title_prefix.into(), has_text: has_text.into(),
+                },
                 control: ControlQuery { role: role.into(), name: name.into(), scope_role: scope_role.into(), scope_name: scope_name.into() },
             },
             reply: sender, pending: () };
@@ -407,7 +411,7 @@ impl<P: Platform> Worker<P> {
         }
     }
 
-    fn process_pending(&mut self, pending: &mut VecDeque<ActiveCommand<P::Provider>>) {
+    fn process_pending(&mut self, pending: &mut VecDeque<ActiveCommand<P>>) {
         let shared = self.shared.clone();
         for _ in 0..pending.len() {
             let mut command = pending.pop_front().unwrap();
@@ -428,7 +432,7 @@ impl<P: Platform> Worker<P> {
         }
     }
 
-    fn complete(&mut self, command: ActiveCommand<P::Provider>, result: Result<Reply>) {
+    fn complete(&mut self, command: ActiveCommand<P>, result: Result<Reply>) {
         if result.is_err() && matches!(command.operation, Operation::CompleteCapture) {
             self.cancel(command.request.session.id, command.arguments.capture_id);
         }
@@ -481,13 +485,14 @@ impl<P: Platform> Worker<P> {
         Ok(())
     }
 
-    fn discover(
-        &mut self, request: &RequestState, query: &WindowQuery, capture: Option<(u64, &HashSet<P::WindowKey>)>,
+    fn select_candidate(
+        &mut self, request: &RequestState, query: &WindowQuery, candidates: Vec<P::Window>,
+        capture: Option<(u64, &HashSet<P::WindowKey>)>,
     ) -> Result<Option<u64>> {
         let session = request.session.id;
         self.require_owner(session)?;
         query.validate()?;
-        let mut candidates = self.platform.candidates(query)?.into_iter()
+        let mut candidates = candidates.into_iter()
             .filter(|window| !capture.is_some_and(|(_, before)| before.contains(&self.platform.window_key(window))));
         let Some(candidate) = candidates.next() else { return Ok(None); };
         if candidates.next().is_some() {
@@ -506,7 +511,7 @@ impl<P: Platform> Worker<P> {
         Ok(Some(id))
     }
 
-    fn step(&mut self, command: &mut ActiveCommand<P::Provider>) -> Result<Option<Reply>> {
+    fn step(&mut self, command: &mut ActiveCommand<P>) -> Result<Option<Reply>> {
         command.request.check()?;
         self.discard_abandoned_captures();
         if let Some(pending) = command.pending.take() {
@@ -526,7 +531,7 @@ impl<P: Platform> Worker<P> {
         }
     }
 
-    fn resume(&mut self, command: &mut ActiveCommand<P::Provider>, pending: PendingCall<P::Provider>) -> Result<Option<Reply>> {
+    fn resume(&mut self, command: &mut ActiveCommand<P>, pending: PendingCall<P>) -> Result<Option<Reply>> {
         match pending {
             PendingCall::PrepareCapture(preparation) => {
                 match receive(&preparation.result) {
@@ -539,6 +544,17 @@ impl<P: Platform> Worker<P> {
                     _ => {},
                 }
                 self.prepare_capture(&command.request, &command.arguments)
+            }
+            PendingCall::Discover { operation, result } => {
+                let Some(response) = receive(&result)? else {
+                    command.pending = Some(PendingCall::Discover { operation, result });
+                    return Ok(None);
+                };
+                let candidates = response?;
+                let Some(id) = self.select_candidate(&command.request, &command.arguments.window, candidates, None)? else {
+                    return Ok(None);
+                };
+                self.act_on_window(command, id, operation)
             }
             PendingCall::ResolveProvider { id, result, until, fallback } => {
                 let provider = match receive(&result) {
@@ -588,23 +604,36 @@ impl<P: Platform> Worker<P> {
             .ok_or_else(|| Failure::new("CLOSED", "The window capture is no longer active."))?;
         let query = capture.query.clone();
         let before = capture.before.clone();
-        let Some(id) = self.discover(request, &query, Some((capture_id, &before)))? else {
+        let candidates = self.platform.candidates(&query)?;
+        let Some(id) = self.select_candidate(request, &query, candidates, Some((capture_id, &before)))? else {
             return Ok(None);
         };
         self.captures.remove(&capture_id);
         Ok(Some(Reply { handle: id, text: None }))
     }
 
-    fn resolve_window(&mut self, request: &RequestState, args: &Arguments) -> Result<Option<u64>> {
-        if args.window_id != 0 {
-            return Ok(Some(args.window_id));
+    fn operate_window(&mut self, command: &mut ActiveCommand<P>, operation: WindowOperation) -> Result<Option<Reply>> {
+        if command.arguments.window_id != 0 {
+            return self.act_on_window(command, command.arguments.window_id, operation);
         }
-        self.discover(request, &args.window, None)
+        self.require_owner(command.request.session.id)?;
+        command.arguments.window.validate()?;
+        match self.platform.find_candidates(command.request.clone(), &command.arguments.window)? {
+            CandidateSearch::Ready(candidates) => {
+                let Some(id) = self.select_candidate(&command.request, &command.arguments.window, candidates, None)? else {
+                    return Ok(None);
+                };
+                self.act_on_window(command, id, operation)
+            }
+            CandidateSearch::Pending(result) => {
+                command.pending = Some(PendingCall::Discover { operation, result });
+                Ok(None)
+            }
+        }
     }
 
-    fn operate_window(&mut self, command: &mut ActiveCommand<P::Provider>, operation: WindowOperation) -> Result<Option<Reply>> {
+    fn act_on_window(&mut self, command: &mut ActiveCommand<P>, id: u64, operation: WindowOperation) -> Result<Option<Reply>> {
         let request = &command.request;
-        let Some(id) = self.resolve_window(request, &command.arguments)? else { return Ok(None); };
         let session = request.session.id;
         let waiting_for_close = operation == WindowOperation::WaitClosed;
         if waiting_for_close && self.closed.get(&id) == Some(&session) {
@@ -632,7 +661,7 @@ impl<P: Platform> Worker<P> {
         }
     }
 
-    fn dispatch(&mut self, command: &mut ActiveCommand<P::Provider>, id: u64, provider: P::Provider) -> Result<Option<Reply>> {
+    fn dispatch(&mut self, command: &mut ActiveCommand<P>, id: u64, provider: P::Provider) -> Result<Option<Reply>> {
         let request = &command.request;
         request.check()?;
         self.window(id, request.session.id)?;

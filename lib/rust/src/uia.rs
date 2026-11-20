@@ -110,6 +110,46 @@ impl Client {
         Ok(Some(ControlResult { text: None }))
     }
 
+    pub(crate) fn contains_visible_text(
+        &self, window: &windows::Window, text: &str, check: &dyn Fn() -> Result<()>,
+    ) -> Result<bool> {
+        check()?;
+        let Some(target) = self.attach(window)? else { return Ok(false); };
+        // SAFETY: condition and FindAll belong to this worker's live COM apartment.
+        let elements = unsafe {
+            self.automation
+                .CreatePropertyCondition(UIA_NamePropertyId, &VARIANT::from(BSTR::from(text)))
+                .and_then(|condition| target.root.FindAll(TreeScope_Descendants, &condition))
+        };
+        let elements = match elements {
+            Ok(elements) => elements,
+            Err(error) if is_unavailable(&error, window) => return Ok(false),
+            Err(error) => return Err(action_error("search text in the window", error)),
+        };
+        let count = match unsafe { elements.Length() } {
+            Ok(count) => count,
+            Err(error) if is_unavailable(&error, window) => return Ok(false),
+            Err(error) => return Err(action_error("count matching elements", error)),
+        };
+        for index in 0..count {
+            check()?;
+            let element = match unsafe { elements.GetElement(index) } {
+                Ok(element) => element,
+                Err(error) if is_unavailable(&error, window) => return Ok(false),
+                Err(error) => return Err(action_error("read a matching element", error)),
+            };
+            let offscreen = match unsafe { element.CurrentIsOffscreen() } {
+                Ok(offscreen) => offscreen,
+                Err(error) if is_unavailable(&error, window) => continue,
+                Err(error) => return Err(action_error("check element visibility", error)),
+            };
+            if !offscreen.as_bool() {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     fn find(
         &self, root: &IUIAutomationElement, selector: Selector<'_>, check: &dyn Fn() -> Result<()>,
     ) -> Result<Option<IUIAutomationElement>> {
@@ -163,6 +203,10 @@ fn unique_visible<T>(matches: impl Iterator<Item = Result<Option<T>>>, selector:
         }
     }
     Ok(found)
+}
+
+fn is_unavailable(error: &Error, window: &windows::Window) -> bool {
+    error.code().0 as u32 == UIA_E_ELEMENTNOTAVAILABLE || !windows::valid(window)
 }
 
 fn action_error(action: &str, error: Error) -> Failure {

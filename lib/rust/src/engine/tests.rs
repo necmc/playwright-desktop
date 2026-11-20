@@ -4,6 +4,7 @@ use std::cell::Cell;
 #[derive(Default)]
 struct FakePlatform {
     windows: Vec<(u32, &'static str)>,
+    pending_windows: Option<Vec<(u32, &'static str)>>,
     actions: usize,
     released: Cell<Option<u64>>,
 }
@@ -17,6 +18,20 @@ impl Platform for FakePlatform {
         Ok(self.windows.iter().copied()
             .filter(|(id, name)| query.matches(name, *id))
             .collect())
+    }
+
+    fn find_candidates(
+        &mut self, _request: Arc<RequestState>, query: &WindowQuery,
+    ) -> Result<CandidateSearch<Self::Window>> {
+        if query.has_text.is_empty() {
+            return self.candidates(query).map(CandidateSearch::Ready);
+        }
+        if let Some(windows) = self.pending_windows.clone() {
+            let (sender, receiver) = mpsc::channel();
+            sender.send(Ok(windows)).unwrap();
+            return Ok(CandidateSearch::Pending(receiver));
+        }
+        self.candidates(query).map(CandidateSearch::Ready)
     }
 
     fn window_key(&self, window: &Self::Window) -> Self::WindowKey {
@@ -80,7 +95,7 @@ fn test_worker() -> Worker<FakePlatform> {
 
 fn command(
     request: Arc<RequestState>, operation: Operation, arguments: Arguments,
-) -> (ActiveCommand<&'static str>, Receiver<Result<Reply>>) {
+) -> (ActiveCommand<FakePlatform>, Receiver<Result<Reply>>) {
     let (reply, receiver) = mpsc::channel();
     (Command { request, operation, arguments, reply, pending: None }, receiver)
 }
@@ -128,15 +143,49 @@ fn title_prefix_respects_pid_and_rejects_ambiguous_matches() {
     worker.platform.windows = vec![(1, "Informe - Perfil A"), (2, "Informe - Perfil B")];
     let mut query = WindowQuery { title_prefix: "Informe".into(), ..WindowQuery::default() };
 
-    let ambiguous = worker.discover(&state, &query, None).unwrap_err();
+    let ambiguous = worker.select_candidate(&state, &query, worker.platform.candidates(&query).unwrap(), None).unwrap_err();
     assert_eq!(ambiguous.code, "AMBIGUOUS");
     query.pid = Some(2);
-    let id = worker.discover(&state, &query, None).unwrap().unwrap();
+    let id = worker.select_candidate(&state, &query, worker.platform.candidates(&query).unwrap(), None).unwrap().unwrap();
     assert_eq!(worker.windows[&id].window, (2, "Informe - Perfil B"));
 
     query.title = "Informe".into();
     query.title_prefix.clear();
-    assert!(worker.discover(&state, &query, None).unwrap().is_none());
+    assert!(worker.select_candidate(&state, &query, worker.platform.candidates(&query).unwrap(), None).unwrap().is_none());
+}
+
+#[test]
+fn pending_has_text_discovery_handles_untitled_windows_and_ambiguity() {
+    let mut worker = test_worker();
+    let owner = session(1);
+    worker.shared.sessions.lock().unwrap().insert(owner.id, owner.clone());
+    let deadline = Instant::now() + Duration::from_secs(10);
+
+    let untitled_query = WindowQuery { has_text: "Windows protegió su PC".into(), ..WindowQuery::default() };
+    assert!(untitled_query.allows_untitled());
+    assert!(untitled_query.matches("", 11520));
+
+    worker.platform.windows.push((2, ""));
+    worker.platform.pending_windows = Some(vec![(2, "")]);
+    let (mut click, _) = command(request(owner.clone(), deadline), Operation::Window(WindowOperation::Click), Arguments {
+        window: untitled_query.clone(),
+        control: ControlQuery { name: "Aceptar".into(), ..ControlQuery::default() },
+        ..Arguments::default()
+    });
+    assert!(worker.step(&mut click).unwrap().is_none());
+    assert!(worker.step(&mut click).unwrap().is_none());
+    assert!(worker.step(&mut click).unwrap().is_none());
+    assert!(worker.step(&mut click).unwrap().unwrap().handle > 0);
+    assert_eq!(worker.platform.actions, 1);
+
+    worker.platform.pending_windows = Some(vec![(2, ""), (3, "")]);
+    let (mut ambiguous, _) = command(request(owner, deadline), Operation::Window(WindowOperation::Click), Arguments {
+        window: untitled_query,
+        control: ControlQuery { name: "Aceptar".into(), ..ControlQuery::default() },
+        ..Arguments::default()
+    });
+    assert!(worker.step(&mut ambiguous).unwrap().is_none());
+    assert_eq!(worker.step(&mut ambiguous).err().unwrap().code, "AMBIGUOUS");
 }
 
 #[test]
