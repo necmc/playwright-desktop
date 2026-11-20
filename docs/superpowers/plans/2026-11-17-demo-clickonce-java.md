@@ -8,12 +8,11 @@
 
 **Especificación.** [Diseño de pc-info](../specs/2026-11-17-demo-clickonce-java-design.md).
 
-**Estado.** La web está implementada y el lanzador y el formulario compilan. Hay comprobaciones parciales de los tres componentes. La activación desde Edge se valida en la tarea 3 y el flujo completo se valida con PC-01 en la tarea 4.
+**Estado.** En validación. La web, el formulario y el lanzador están implementados. Faltan la prueba de reintento y la revisión final. El recorrido completo de CP-PI-01 se sigue en el [plan de activación ClickOnce](2026-11-19-pc-info-activacion-clickonce.md).
 
 ## Restricciones globales
 
-- Cada demo ocupa su propia carpeta dentro de `demo/`. Este caso completo pertenece a `demo/pc-info/`.
-- La carpeta raíz `lib/` queda destinada a la librería de Playwright Python.
+- La aplicación de ejemplo está en `demo/pc-info/` y su automatización en `demo/pc-info-automation/`.
 - Tres campos editables en Java, con fecha actual, nombre del equipo y alias `Usuario demo`.
 - Operaciones locales independientes con vigencia de veinte minutos.
 - La confirmación devuelve los datos que aparecen en el PDF.
@@ -44,7 +43,7 @@ Archivo principal `demo/pc-info/desktop-java/src/InformationForm.java`. Recibe u
 - [x] Implementar Swing con campos accesibles y botón **Confirmar**.
 - [x] Implementar validación y envío fuera del hilo de UI, conservación de valores ante fallos y cancelación al cerrar.
 - [x] Compilar para Java 11.
-- [x] Verificar con OpenJDK 11 el formulario en arranque directo. Los seis casos técnicos anteriores son evidencia histórica. La demo conserva un único escenario funcional automatizado.
+- [x] Verificar con OpenJDK 11 el formulario en arranque directo.
 - [ ] Reproducir un fallo de entrega en Java y comprobar que el reintento conserva los valores y completa la operación.
 
 ## Tarea 3 — lanzador y publicación
@@ -53,14 +52,15 @@ Archivos `demo/pc-info/launcher-clickonce/Launcher.cs` y `demo/pc-info/launcher-
 
 - [x] Compilar C# con las herramientas disponibles de Windows.
 - [x] Generar manifiestos con parámetros URL habilitados y verificar su distribución desde Flask.
-- [x] Corregir el conflicto de identidad Win32 con `/nowin32manifest`, recompilar y comprobar la ausencia de la identidad conflictiva en el ejecutable.
-- [x] Ejecutar la publicación corregida mediante el controlador ClickOnce del sistema y comprobar el arranque del lanzador y del JAR. Esta comprobación ejercitó la publicación fuera del navegador.
-- [ ] Confirmar la activación desde Edge. **Cierre.** Al pulsar **Obtener información** en la web, ClickOnce ejecuta el lanzador con la URL de la operación y abre el formulario Java. Registrar cualquier confirmación que deba aceptar el usuario.
+- [x] Compilar con `/nowin32manifest` para conservar la identidad declarada en los manifiestos ClickOnce.
+- [x] Comprobar el arranque del lanzador y del JAR mediante el controlador ClickOnce del sistema fuera del navegador.
+
+La [tarea de activación completa](2026-11-19-pc-info-activacion-clickonce.md#tarea-2--activación-completa) centraliza la verificación desde el navegador.
 
 ## Tarea 4 — recorrido y documentación
 
 - [x] Proporcionar `demo/pc-info/start.ps1` para preparar dependencias, compilar los componentes y arrancar Flask con un solo comando. Se verificaron el arranque desde otra carpeta, el puerto configurable, HTTP 200, creación de operaciones, coherencia de la publicación, rechazo de puerto ocupado y parada con Ctrl+C. El arranque predeterminado quedó verificado en `18765`.
 - [x] Documentar el arranque y la ejecución de la automatización en `demo/README.md`.
-- [x] Mantener los detalles internos en la documentación técnica y crear `lib/README.md`.
-- [ ] Ejecutar PC-01 con el wheel local de `playwright-desktop`. **Cierre.** El flujo completo pasa desde el navegador y los tres valores son legibles en la vista previa del PDF. Registrar el resultado según el [plan de pruebas](../../../demo/pc-info-automation/test_plan.md#caso-pc-01--confirmar-datos-y-generar-el-pdf).
-- [ ] Ejecutar una revisión final independiente de la demo y corregir los hallazgos antes de entregar. Usar la evidencia de PC-01.
+- [x] Documentar el intercambio entre los componentes en la [documentación técnica](../../documentacion-tecnica.md).
+- [x] Verificar CP-PI-02 en Edge y Chrome. [Resultados del clic de apertura](2026-11-19-pc-info-activacion-clickonce.md#tarea-1--clic-de-apertura-desde-el-navegador).
+- [ ] Ejecutar una revisión final independiente de la demo y corregir los hallazgos antes de entregar. Usar la evidencia de CP-PI-01.

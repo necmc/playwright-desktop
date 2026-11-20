@@ -14,7 +14,7 @@ playwright-desktop integra Playwright Python con aplicaciones de escritorio invo
 | JavaScript | Solicitar la activación ClickOnce y consultar el resultado de la operación. |
 | Lanzador C# | Leer los argumentos de activación y ejecutar el JAR con el runtime Java configurado. |
 | Formulario Java | Precargar los datos del equipo, permitir su edición y devolverlos a la web. |
-| Librería Python/Rust | Extender Page con `page.desktop` y ejecutar las acciones semánticas mediante Java Access Bridge. |
+| Librería Python/Rust | Extender `Page` con `page.desktop`, localizar ventanas y usar Java Access Bridge o UI Automation según el proveedor disponible. |
 
 ## Flujo de la demo
 
@@ -63,21 +63,21 @@ El almacén admite hasta cien operaciones vigentes. Una petición mayor de 64 KB
 
 El script de compilación utiliza `javac --release 11` y `jar` para producir el formulario. Compila el lanzador C# para .NET Framework 4.8 y arquitectura x64 con el compilador de Windows. Microsoft.DotNet.Mage 10.0.0 genera los manifiestos ClickOnce con parámetros URL habilitados y una versión por compilación, calculada a partir de la fecha UTC con resolución de dos segundos. [Herramientas y publicación ClickOnce](https://learn.microsoft.com/en-us/visualstudio/deployment/clickonce-security-and-deployment?view=visualstudio)
 
-El lanzador se compila con `/nowin32manifest`. El manifiesto Win32 que `csc` incorpora por defecto identifica `MyApplication.app`, mientras que el ensamblado se llama `InformationDemo`. Esa diferencia provocaba `RefDefValidation` durante la descarga de ClickOnce, antes del arranque de Java. Se conservan los manifiestos externos de ClickOnce generados por Mage. [Caso documentado en el repositorio de Microsoft](https://github.com/microsoft/playwright-dotnet/issues/2874).
-
-La publicación de esta demo local se genera sin firma. Las advertencias de firma del registro recibido no eran la causa de `RefDefValidation`.
+El lanzador se compila con `/nowin32manifest` para conservar la identidad de los manifiestos ClickOnce generados por Mage. La publicación de la demo se genera sin firma.
 
 Dentro de `demo/pc-info/`, `start.ps1` prepara las dependencias Python, llama a `launcher-clickonce/build.ps1` y ejecuta Flask en primer plano, con el mismo puerto utilizado para la publicación. Comprueba que el puerto esté disponible y detiene la preparación si falla un paso. El servidor arranca sin recarga automática para mantener un único proceso que se detiene con `Ctrl+C`.
 
 La dirección predeterminada es `http://127.0.0.1:18765`. El parámetro `-Port` de `start.ps1` configura conjuntamente la web y la publicación ClickOnce.
 
-La automatización usa la demo en ejecución en el puerto predeterminado. El escenario obtiene de la publicación ClickOnce el runtime que necesita Java Access Bridge y comprueba el recorrido desde el navegador hasta el PDF.
+La automatización usa la demo en el puerto predeterminado. CP-PI-01 obtiene de la publicación el runtime de Java y comprueba el PDF. CP-PI-02 usa el wheel local y termina al accionar el control de apertura del navegador.
+
+El Page Object de CP-PI-02 localiza la ventana con `page.desktop.window(pid=pid, title_prefix=...)`. En Edge acciona **Abrir archivo** en el aviso reciente. En Chrome acciona el enlace del manifiesto en el historial de descargas.
 
 ### Navegador de la automatización
 
 Se intenta usar el navegador predeterminado de Windows si es compatible con Chromium para Playwright. Si el predeterminado no es compatible, se intenta usar Edge o Chrome instalados, en ese orden. Chrome y Edge tienen soporte oficial en Playwright. Otros navegadores Chromium dependen de su versión, y el Firefox instalado por el usuario requiere una versión adaptada para que Playwright lo controle. [Navegadores de Playwright](https://playwright.dev/python/docs/browsers).
 
-Edge ofrece soporte nativo para ClickOnce. Para usar una extensión en otro navegador, abre un perfil de pruebas con `--user-data-dir` apuntando a la ruta que imprime la automatización. Instala allí la extensión de tu elección y cierra ese perfil antes de ejecutar `run.py`. Si ese perfil existe, se conserva para reutilizar la extensión. En los demás casos se usa un perfil temporal. [ClickOnce en Edge](https://learn.microsoft.com/en-us/deployedge/edge-learn-more-co-di) y [perfiles de pruebas de Playwright](https://playwright.dev/python/docs/api/class-browsertype#browser-type-launch-persistent-context).
+Edge ofrece soporte nativo para ClickOnce. Para usar una extensión en otro navegador con CP-PI-01, abre un perfil de pruebas con `--user-data-dir` apuntando a la ruta que imprime la automatización. Instala allí la extensión y cierra ese perfil antes de ejecutar `run.py`. CP-PI-02 usa un perfil temporal para aislar las descargas de la prueba. [ClickOnce en Edge](https://learn.microsoft.com/en-us/deployedge/edge-learn-more-co-di) y [perfiles de pruebas de Playwright](https://playwright.dev/python/docs/api/class-browsertype#browser-type-launch-persistent-context).
 
 `launcher-clickonce/build.ps1` genera las clases y el JAR en `desktop-java/build/` y copia el JAR a la publicación de `launcher-clickonce/publish/`. Mage se instala en `launcher-clickonce/.tools/`. Flask sirve esa publicación mediante `/clickonce/`.
 
@@ -121,7 +121,7 @@ El script reutiliza `build_py.ps1` para compilar con Maturin y sube el wheel de 
 
 El wheel incluye el paquete `playwright_desktop` y sus metadatos. `lib/README.md` se incorpora como descripción de PyPI; los README del repositorio y de la demo no se empaquetan. Las dependencias PDF pertenecen a la demo, no al paquete publicado.
 
-El build aplica el [remapeo de rutas de Rust](https://doc.rust-lang.org/rustc/remap-source-paths.html) para evitar incluir ubicaciones del proyecto y del caché Cargo. Maturin elimina símbolos de depuración y tiene desactivado el SBOM Rust automático porque contenía referencias locales. La revisión del wheel reconstruido comprobó sus archivos, metadatos, hashes y ausencia de rutas locales y credenciales; la importación fuera del repositorio y las 19 pruebas Python pasaron contra ese wheel.
+El build aplica el remapeo de rutas de Rust y Maturin elimina los símbolos de depuración. El SBOM Rust automático está desactivado para evitar que el wheel incluya rutas de construcción. [Remapeo de rutas de Rust](https://doc.rust-lang.org/rustc/remap-source-paths.html).
 
 Las salidas se separan por SDK; actualmente solo está implementado Python:
 

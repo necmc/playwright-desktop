@@ -4,7 +4,7 @@
 
 `pc-info` demuestra cómo integrar Playwright con una aplicación de escritorio invocada desde la web. Las tareas y sus resultados se registran en el [plan de implementación](../plans/2026-11-17-demo-clickonce-java.md).
 
-La demo permitirá recorrer una operación completa entre una web Python, un lanzador ClickOnce en C# y una aplicación Java de escritorio. La web generará un PDF con los datos confirmados en Java y lo mostrará en el visor del navegador.
+La demo enlaza una web Python, un lanzador ClickOnce en C# y una aplicación Java de escritorio. La web genera un PDF con los datos confirmados en Java y lo muestra en el visor del navegador.
 
 ## Requisitos del usuario
 
@@ -15,13 +15,11 @@ La demo permitirá recorrer una operación completa entre una web Python, un lan
 - Los campos incluyen la fecha actual, un dato local del PC y un alias.
 - Al confirmar en Java, los datos regresan a la web y se genera y previsualiza un PDF.
 - Los componentes de la demo pertenecen a este repositorio.
-- Cada demo ocupa su propia carpeta dentro de `demo/`. Este caso completo pertenece a `demo/pc-info/`. La librería de Playwright Python tendrá su carpeta raíz `lib/`.
+- La aplicación está en `demo/pc-info/` y su automatización en `demo/pc-info-automation/`.
 
 ## Enfoque adoptado
 
 Se activa ClickOnce una vez por operación y el resultado se devuelve directamente a Flask. Cada activación debe abrir una ventana Java asociada a esa operación.
-
-La alternativa considerada consiste en mantener un servicio local Java y hacer que el navegador consulte su disponibilidad antes de pedir una ventana. Ese enfoque añade un servicio persistente y su gestión de arranque y cierre. Podrá evaluarse si aparece una necesidad concreta durante el desarrollo de la librería.
 
 ## Campos y presentación
 
@@ -78,7 +76,7 @@ La configuración inicial es local, con Flask en `127.0.0.1:18765` y puerto conf
 - OpenJDK 11 o superior como runtime configurable mediante `-JavaHome`.
 - C# como lanzador de Windows x64 para .NET Framework 4.8, compilado con `/nowin32manifest` para evitar un conflicto de identidades en ClickOnce.
 - Microsoft.DotNet.Mage 10.0.0 para generar los manifiestos, instalado localmente mediante el SDK de .NET 9 o superior.
-- Microsoft Edge para comprobar la activación real desde una página web.
+- Un navegador compatible con Playwright para ejecutar la automatización. El flujo completo requiere que ese navegador pueda activar ClickOnce.
 
 `demo/pc-info/start.ps1` prepara las dependencias, compila los componentes, publica ClickOnce y arranca Flask en primer plano. Su parámetro `-Port` configura la misma dirección para la web y la publicación. Las instrucciones de uso están en el [README de demos](../../../demo/README.md).
 

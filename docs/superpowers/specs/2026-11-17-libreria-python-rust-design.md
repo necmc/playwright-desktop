@@ -6,15 +6,15 @@ El punto de entrada público es `page.desktop`. Las tareas y sus resultados se r
 
 Una importación de `playwright_desktop` amplía las clases públicas `Page` de Playwright Python. Los usuarios mantienen sus imports de Playwright, sus fixtures y sus instrucciones web. Las instancias creadas antes de importar la extensión también reciben el atributo añadido a su clase.
 
-La primera versión controla el formulario Swing de la [demo existente](../../../demo/pc-info/), en Windows x64 y OpenJDK 11+. El motor es Rust, expuesto mediante PyO3. `windows-rs` proporciona las llamadas de Windows y Java Access Bridge proporciona acceso semántico a los controles Java.
+La implementación actual controla ventanas nativas y Swing en Windows x64. El motor Rust se expone mediante PyO3. El adaptador de Windows utiliza `windows-rs` para Win32 y UI Automation. Swing utiliza Java Access Bridge.
 
-El alcance inicial comprende localizar una ventana, seleccionar controles por rol y nombre accesible exactos, leer y reemplazar texto, invocar un botón y esperar el cierre de una ventana. Las pruebas de escritorio se ejecutan en serie en una sesión interactiva de Windows. La librería no implementará OCR, grabador, un lenguaje de selectores, entrada por coordenadas, un servicio HTTP local, control de instaladores ni una plataforma general de automatización.
+El alcance comprende localizar ventanas, seleccionar controles por rol y nombre accesible exactos, invocar acciones accesibles y esperar el cierre de una ventana. Java Access Bridge también permite leer y reemplazar texto en Swing. Las pruebas de escritorio se ejecutan en serie en una sesión interactiva de Windows.
 
-## Enfoque y alternativas
+## Proveedores en Windows
 
-El backend Java Access Bridge se integra en el proceso Python mediante Rust. `windows-rs` enumera ventanas, obtiene PID y título y carga las funciones de la DLL del bridge. Las llamadas JAB consultan y accionan los controles Swing. El runtime OpenJDK usado por la demo contiene `windowsaccessbridge-64.dll` y `jabswitch.exe`; la lectura, edición y confirmación en Java abierto directamente ya se comprobaron.
+El adaptador de Windows usa `windows-rs` para enumerar ventanas y obtener su PID y título. Rust carga la DLL de Java Access Bridge para consultar y accionar controles Swing.
 
-UI Automation de Windows es apropiado para controles que expongan su árbol UIA, pero no se asumirá que un formulario Swing ofrece ese árbol. Un backend UIA para otras aplicaciones queda fuera de la primera versión. Controlar teclado y coordenadas permitiría algunas acciones, pero no proporciona la búsqueda semántica requerida para verificar campos y botones. Introducir un agente dentro de Java exigiría modificar las aplicaciones bajo prueba.
+UI Automation permite accionar los controles nativos que exponen `InvokePattern`. Para Swing, Java Access Bridge permite acceder a los campos y botones expuestos por la JVM.
 
 Java Access Bridge es una dependencia del runtime Java, no un automatizador adicional. Debe estar disponible y habilitado antes de iniciar la aplicación Java. La librería diagnostica su ausencia; importar `playwright_desktop` no modifica la configuración de Java o Windows. [API JAB](https://docs.oracle.com/en/java/javase/11/access/java-access-bridge-api.html), [habilitación del bridge](https://docs.oracle.com/en/java/javase/25/access/enabling-and-testing-java-access-bridge.html).
 
@@ -29,7 +29,8 @@ lib/
   python/playwright_desktop/
     __init__.py                  Exportaciones y aplicación automática del parche
     _patch.py                    Instalación, colisiones y desinstalación
-    _backend.py                  Plataforma, carga y configuración del adaptador Python
+    _platform.py                 Compatibilidad del entorno
+    _backend.py                  Carga del binding y configuración de Java
     _sync.py                     Fachada síncrona de escritorio
     _async.py                    Fachada asíncrona de escritorio
     _runtime.py                  Sesión por página y llamadas al motor
@@ -45,7 +46,10 @@ lib/
     src/
       lib.rs                    Módulo PyO3 _native
       engine.rs                 Worker, comandos, plazos y ciclo de vida
+      engine/platform.rs        Contrato Rust del adaptador
+      engine/windows_platform.rs Adaptador de Windows y selección de proveedor
       backend.rs                Adaptador Windows con Java Access Bridge
+      uia.rs                    Controles nativos mediante UI Automation
       windows.rs                Descubrimiento y validación de ventanas y procesos
       jab/
         mod.rs                  Recorrido del árbol y acciones
@@ -66,8 +70,9 @@ demo/README.md                  Objetivo, contenido y ejecución de las demos
 demo/pc-info-automation/
   models/                       DTO de fecha, equipo y alias
   config.py                     Dirección, plazo y runtime de la demo
-  run.py                        Comando único del escenario funcional
-  pages/                        Page Objects de web y formulario Java
+  run.py                        Ejecución de los casos funcionales
+  run_local.ps1                 Ejecuta CP-PI-02 con el wheel local
+  pages/                        Page Objects de web, Java y navegador
   fixtures/                     Selección, preparación y limpieza del navegador
   utils/                        Lectura del texto del PDF
   tests/                        Escenario funcional y aserciones web/PDF
@@ -82,123 +87,55 @@ Swing puede ejecutarse en distintos sistemas con su JVM. Java Access Bridge expo
 | Entorno | Acceso a los controles |
 | --- | --- |
 | Windows con Swing | Java Access Bridge. Motor actual. |
-| Windows con controles nativos | Controles con proveedor de accesibilidad. [UI Automation](https://learn.microsoft.com/en-us/windows/win32/winauto/uiauto-uiautomationoverview). |
+| Windows con controles nativos | UI Automation. Motor actual. [UI Automation](https://learn.microsoft.com/en-us/windows/win32/winauto/uiauto-uiautomationoverview). |
 | macOS | Autorización de accesibilidad del proceso. [AXUIElement](https://developer.apple.com/documentation/applicationservices/axuielement_h?language=o_5). |
 | Linux | Sesión con bus de accesibilidad. [AT-SPI sobre D-Bus](https://github.com/GNOME/at-spi2-core#accessibility-infrastructure). |
 
-La librería seleccionará el motor según el sistema y la arquitectura. Si Windows admite más de un motor, la selección también tendrá en cuenta cómo la ventana expone sus controles. La configuración Java y el límite de texto pertenecen al adaptador JAB. La ruta de UI Automation funcionará con su propia configuración.
+El motor selecciona JAB cuando el bridge reconoce la ventana y utiliza UI Automation para las demás. La configuración Java y el límite de texto pertenecen al adaptador JAB.
 
-Cada adaptador traduce roles y acciones a la API del sistema y conserva allí sus identificadores nativos y reglas de hilo. `Page.desktop` sigue utilizando locators, plazos y errores públicos comunes. El puerto Rust común se extraerá al incorporar el segundo adaptador, con las operaciones que ambos demuestren necesitar. Cada plataforma validará su wheel y el contrato con una aplicación real.
+El contrato Rust separa el coordinador del adaptador de Windows. Cada adaptador traduce roles y acciones y conserva sus identificadores nativos y reglas de hilo. `Page.desktop` mantiene locators, plazos y errores comunes.
 
 Cada build limpia únicamente sus artefactos. Python utiliza `dist/python/` y `rust/target/python/`; sus scripts no eliminan las carpetas de otros SDK.
 
-La automatización de la demo sigue Page Object Model (POM) con un único escenario funcional. El test muestra la importación, la captura con `page.desktop.expect_window()` y las aserciones. El Page Object Java recibe la ventana capturada mediante `opened.value` y encapsula locators y acciones. La fixture prepara el runtime de Java. Se ejecuta con `py demo/pc-info-automation/run.py`, sin variables especiales ni descubrimiento manual. Las comprobaciones del motor y de concurrencia pertenecen a las pruebas de la librería.
+La demo usa Page Object Model (POM). CP-PI-01 captura Java mediante `page.desktop.expect_window()` y comprueba los datos y el PDF. CP-PI-02 usa el wheel local para localizar la ventana del navegador por PID y prefijo de título y accionar el control de apertura. Las comprobaciones del motor y de concurrencia pertenecen a la librería.
 
 Cada demo conserva su aplicación en `demo/<nombre>/` y todos los flujos que utilizan la librería en `demo/<nombre>-automation/`. Las pruebas internas de la librería pertenecen a `lib/tests/`.
 
-## Configuración de distribución propuesta
+## Configuración de distribución
 
-`lib/pyproject.toml`:
+El manifiesto Python declara Playwright como dependencia y configura Maturin para compilar el módulo `playwright_desktop._native`. El manifiesto Rust declara la ABI de PyO3 y las funcionalidades Win32 y UIA. [pyproject.toml](../../../lib/pyproject.toml), [Cargo.toml](../../../lib/rust/Cargo.toml).
 
-```toml
-[build-system]
-requires = ["maturin>=1.16,<2"]
-build-backend = "maturin"
-
-[project]
-name = "playwright-desktop"
-version = "0.1.0"
-description = "Desktop interactions for Playwright Python"
-readme = "README.md"
-requires-python = ">=3.10"
-dependencies = ["playwright>=1.63,<1.66"]
-classifiers = [
-  "Operating System :: Microsoft :: Windows",
-  "Programming Language :: Python :: 3",
-  "Programming Language :: Rust",
-]
-
-[tool.maturin]
-manifest-path = "rust/Cargo.toml"
-python-source = "python"
-module-name = "playwright_desktop._native"
-bindings = "pyo3"
-strip = true
-
-[tool.maturin.sbom]
-rust = false
-```
-
-`lib/rust/Cargo.toml`:
-
-```toml
-[package]
-name = "playwright-desktop-native"
-version = "0.1.0"
-edition = "2024"
-rust-version = "1.85"
-publish = false
-
-[lib]
-name = "_native"
-crate-type = ["cdylib", "rlib"]
-
-[dependencies]
-pyo3 = { version = "=0.30.1", features = ["abi3-py310"] }
-
-[target.'cfg(windows)'.dependencies]
-windows = { version = "=0.62.2", default-features = false, features = [
-  "std",
-  "Win32_Foundation",
-  "Win32_System_LibraryLoader",
-  "Win32_System_Threading",
-  "Win32_UI_WindowsAndMessaging",
-] }
-
-[profile.release]
-lto = "thin"
-codegen-units = 1
-```
-
-Son las versiones base del diseño. La evidencia de compatibilidad se registra en el [plan de implementación](../plans/2026-11-17-libreria-python-rust.md#tarea-7--compatibilidad-rendimiento-y-revisión-final). Una versión fuera del intervalo debe producir un diagnóstico claro y no un parche parcial.
+La evidencia de compatibilidad se registra en el [plan de implementación](../plans/2026-11-17-libreria-python-rust.md#tarea-7--compatibilidad-rendimiento-y-revisión-final).
 
 Se usa Maturin para el wheel mixto y PyO3 con ABI estable para CPython convencional 3.10 a 3.14 en Windows x64. Los builds free-threaded, PyPy y otras plataformas quedan fuera de la matriz inicial. Los usuarios de un wheel precompilado no necesitan Rust; compilar desde fuentes requiere Rust MSVC y las herramientas C++ de Windows. Se conserva el uso de Python global mediante `pip install --user`, sin exigir un entorno virtual.
 
-Las dependencias directas de ejecución son Playwright, PyO3 y `windows`; Maturin pertenece a la construcción y pypdf solo a las pruebas del PDF. Se utilizan `threading`, `weakref`, `asyncio`, canales, colecciones y temporizadores estándar. No se añaden Tokio, un framework desktop, JNI, JNA o una librería Python de automatización.
+El paquete Python depende de Playwright. El crate usa PyO3 y `windows`, Maturin construye el wheel y pypdf se usa en las pruebas del PDF de la demo.
 
 Referencias: [estructura mixta Maturin](https://www.maturin.rs/project_layout.html), [PyO3 y ABI estable](https://pyo3.rs/v0.30.1/building-and-distribution), [PyO3 0.30.1 y MSRV](https://github.com/PyO3/pyo3/blob/v0.30.1/Cargo.toml), [windows 0.62.2](https://docs.rs/crate/windows/0.62.2).
 
 ## API pública y unión con Playwright
 
-Ejemplo propuesto, sobre una página y un navegador creados mediante Playwright oficial:
+Ejemplo sobre una página de Playwright que ya está abierta.
 
 ```python
 import playwright_desktop
-from playwright.sync_api import sync_playwright
 
-with sync_playwright() as playwright:
-    browser = playwright.chromium.launch(channel="msedge", headless=False)
-    page = browser.new_page()
-    page.desktop.configure(java_home="C:/ruta/openjdk")
-    page.goto("http://127.0.0.1:18765")
+with page.desktop.expect_window(title="Información del equipo") as opened:
+    page.get_by_role("button", name="Obtener información").click()
 
-    with page.desktop.expect_window(title="Información del equipo", timeout=15_000):
-        page.get_by_role("button", name="Obtener información").click()
-
-    page.desktop.get_by_role("textbox", name="Alias").fill("Prueba local")
-    page.desktop.get_by_role("button", name="Confirmar").click()
-    page.desktop.wait_for_closed(timeout=10_000)
-    page.get_by_text("Información recibida. El PDF está listo.").wait_for()
-    browser.close()
+window = opened.value
+window.get_by_role("textbox", name="Alias").fill("QA")
+window.get_by_role("button", name="Confirmar").click()
+window.wait_for_closed()
 ```
 
 La variante async conserva los imports de `playwright.async_api`, utiliza `async with page.desktop.expect_window(...)` y `await` para las acciones nativas. `get_by_role()` construye una consulta local y no requiere `await`, igual que un locator web.
 
 `configure()` y `set_default_timeout()` actualizan estado Python local y tampoco requieren `await`. El cierre explícito se escribe `page.desktop.close()` en sync y `await page.desktop.close()` en async. Salir de un contexto de captura por una excepción cancela la captura sin ocultar la excepción original del código web.
 
-`page.desktop.window(title=..., pid=None)` permite adjuntarse a una ventana existente mediante una consulta diferida. Su primera acción espera una coincidencia única. `expect_window()` toma una instantánea antes del clic web, espera una ventana nueva y la asocia al `page.desktop` de esa página al salir del contexto. `get_by_role()` y `wait_for_closed()` usan el identificador nativo capturado y requieren una captura exitosa previa. El objeto devuelto por `as opened` conserva `.value` para quien necesite guardar una referencia explícita a la ventana. El timeout predeterminado es 10 000 ms y puede cambiarse con `page.desktop.set_default_timeout(ms)`. Cero hace una comprobación inmediata.
+`page.desktop.window()` identifica una ventana existente por `title`, `title_prefix` o `pid`. El PID se puede combinar con un filtro de título. Su primera acción espera una coincidencia única. `expect_window()` toma una instantánea antes del clic web, espera una ventana nueva y la asocia al `page.desktop` de esa página al salir del contexto. `get_by_role()` y `wait_for_closed()` usan el identificador nativo capturado y requieren una captura exitosa previa. El objeto devuelto por `as opened` conserva `.value`. El timeout predeterminado es 10 000 ms y puede cambiarse con `page.desktop.set_default_timeout(ms)`. Cero hace una comprobación inmediata.
 
-El MVP expone `get_by_role("textbox" | "button", name=...)`, `fill(text, timeout=...)`, `input_value(timeout=...)`, `click(timeout=...)` y `wait_for_closed(timeout=...)`. `input_value` y `fill` solo aplican a campos de texto; `click` solo a botones. La coincidencia es exacta, sensible a mayúsculas y basada en nombre accesible. Un rol no soportado se rechaza antes de llamar a Rust.
+JAB permite leer y editar campos de texto y accionar botones. UIA permite accionar botones, enlaces y opciones de menú y buscar esos controles dentro de un contenedor accesible. `get_by_role()` compara el nombre accesible exacto.
 
 El parche utiliza las clases exportadas por `playwright.sync_api.Page` y `playwright.async_api.Page`, sin reemplazarlas ni utilizar `_impl`, greenlets privados o clases internas de Playwright. La implementación sigue estas reglas:
 
@@ -232,16 +169,17 @@ flowchart LR
     P[Page oficial] --> D[Descriptor desktop]
     D --> S[Fachada sync o async]
     S --> B[PyO3: datos y comandos]
-    B --> W[Worker Rust con cola y bucle de mensajes]
-    W --> AD[Adaptador Windows y Java]
-    AD --> N[windows-rs: HWND, PID, carga de DLL]
+    B --> W[Coordinador Rust]
+    W --> AD[Adaptador Windows]
+    AD --> N[Win32: ventanas, PID y títulos]
     AD --> J[Java Access Bridge: árbol, texto y acciones]
+    AD --> U[UI Automation: controles nativos]
     J --> A[Formulario Swing]
 ```
 
 ### Carga, ABI y propiedad de recursos
 
-El cliente especifica `page.desktop.configure(java_home=...)` antes del primer uso, o el motor utiliza `JAVA_HOME`. El diagnóstico debe distinguir ruta ausente, DLL inexistente, arquitectura incompatible, símbolo no disponible y bridge que no reconoce la ventana. Se carga una ruta absoluta mediante `LoadLibraryExW`, limitando la búsqueda de dependencias al directorio de la DLL y a los directorios seguros del sistema. No se distribuye una copia arbitraria de la DLL ni se busca una DLL por nombre en el directorio actual.
+El adaptador de Windows comprueba si el bridge reconoce la ventana. Para localizar la DLL reutiliza el runtime ya cargado o consulta `java_home` y `JAVA_HOME`. El diagnóstico distingue ruta ausente, DLL inexistente, arquitectura incompatible, símbolo no disponible y bridge que no reconoce la ventana. Se carga una ruta absoluta mediante `LoadLibraryExW`, limitando la búsqueda de dependencias al directorio de la DLL y a los directorios seguros del sistema.
 
 Existe un único motor JAB por proceso Python. Su ruta de DLL queda fijada al inicializarse; intentar usar otra ruta posteriormente produce `DesktopConfigurationError`. Los timeouts y las consultas pertenecen a cada fachada de `Page`. Cambiar de runtime del bridge requiere iniciar otro proceso de pruebas.
 
@@ -255,29 +193,29 @@ Base de ABI y símbolos: [AccessBridgePackages.h](https://raw.githubusercontent.
 
 ### Descubrimiento, selección y acciones
 
-El adaptador enumera ventanas superiores visibles mediante `EnumWindows` y filtra por título y PID antes de consultar Java. El worker espera hasta el plazo cuando hay cero coincidencias, reserva la ventana cuando hay una y comunica un error de ambigüedad cuando hay varias.
+El adaptador enumera ventanas superiores visibles mediante `EnumWindows` y aplica los filtros de título y PID. El coordinador espera hasta el plazo cuando hay cero coincidencias, reserva la ventana cuando hay una y comunica un error de ambigüedad cuando hay varias.
 
-Cada ventana se vincula al HWND, proceso y contexto raíz Java obtenidos al adjuntarse. Antes de cada acción se comprueba que continúa siendo la misma ventana. Las consultas se vuelven a resolver contra su árbol y no conservan indefinidamente objetos de controles que pueden haberse reemplazado. Los roles y estados se normalizan desde sus variantes inglesas del bridge.
+Cada ventana se vincula al HWND y al proceso. El proveedor conserva su referencia al árbol accesible y comprueba su identidad antes de cada acción. Los controles se vuelven a buscar en ese árbol al actuar.
 
 El recorrido del árbol es iterativo y acotado por profundidad, cantidad de nodos y plazo. Debe informar de un límite alcanzado; no convertir una búsqueda incompleta en una selección aparentemente única. Se agrupan las propiedades disponibles en una sola consulta JAB para reducir viajes a la JVM.
 
-`fill` exige un campo editable y habilitado, llama a `setTextContents` y comprueba el valor devuelto por una lectura posterior. El límite inicial del bridge es 1023 unidades UTF-16; se informa de excesos antes de invocarlo. `click` exige un botón disponible e invoca su acción accesible identificada, sin mover el ratón. Una acción no soportada genera un error explícito.
+En Swing, `fill()` exige un campo editable y habilitado, llama a `setTextContents` y comprueba el valor con una lectura posterior. JAB valida el límite de 1023 unidades UTF-16 antes de escribir. `click()` usa la acción accesible de Swing o `InvokePattern` en controles UIA habilitados. El proveedor devuelve un error explícito si el control no admite la acción.
 
-`expect_window()` facilita el caso de lanzamiento de la demo; no prueba por sí mismo que un proceso haya sido creado por una página determinada. El MVP admite un flujo desktop activo por proceso de pruebas y rechaza una segunda captura simultánea. La ejecución nativa debe ser serial también entre procesos de prueba que compartan el mismo escritorio. Si otra aplicación abre una ventana indistinguible durante una captura, se requiere un filtro adicional como PID o un título único. No se promete correlación automática para lanzamientos paralelos idénticos.
+`expect_window()` detecta una ventana nueva que cumple los filtros. El coordinador reserva el flujo de escritorio para una sesión por proceso de pruebas. Si varias ventanas coinciden durante una captura, la prueba debe precisar el PID o el título.
 
-La reserva del flujo comienza al entrar en `expect_window()` y continúa después de salir de su contexto, mientras la ventana permanezca abierta. Adjuntarse con `window()` obtiene la misma reserva al resolver por primera vez su consulta. Se libera al observar el cierre de la ventana, al llamar a `page.desktop.close()` o al cerrarse la página. Un timeout o excepción antes de adjuntar la ventana también la libera. Salir del contexto tras una captura correcta no libera la reserva. En el MVP una sesión controla una sola ventana Java; los diálogos secundarios quedan fuera de su alcance inicial.
+La reserva comienza al entrar en `expect_window()` o al resolver la consulta de `window()`. Una sesión puede manejar varias ventanas, como una ventana nativa y otra de Swing. El coordinador libera las referencias al cerrar la ventana, la sesión o la página.
 
 ### Hilos, esperas y errores
 
-Un worker Rust procesa los comandos y bombea mensajes Windows. Los objetos Java y los punteros de función permanecen en ese hilo. Las búsquedas pendientes se revisan por ciclos; no deben bloquear la cola durante todo su timeout.
+El coordinador procesa los comandos y cada proveedor conserva sus recursos en su propio hilo. JAB bombea mensajes de Windows y UIA mantiene su sesión COM.
 
 Los bindings copian los argumentos Python a tipos Rust y utilizan `Python::detach` mientras esperan al motor. La fachada async utiliza `asyncio.to_thread` exclusivamente para llamadas al binding nativo; ningún objeto o método Playwright se ejecuta en ese hilo. Las instrucciones web siguen en su hilo o event loop originales. [Playwright y threading](https://playwright.dev/python/docs/library#threading), [PyO3 y separación del intérprete](https://pyo3.rs/v0.30.1/parallelism).
 
-Los plazos se calculan con reloj monótono e incluyen el tiempo de cola. Antes de empezar una acción se comprueba su plazo y cancelación. Cancelar una coroutine invalida la solicitud y descarta respuestas tardías; no se reutiliza su consulta para otra página. Un timeout no repite automáticamente un clic cuyo resultado se desconoce.
+Los plazos incluyen el tiempo en cola. Justo antes de escribir o accionar un control se comprueba el plazo y la cancelación. Si la operación nativa ya pudo modificar el control, el timeout indica que el resultado es incierto.
 
-Una llamada FFI que ya entró en una JVM bloqueada no se puede interrumpir con seguridad desde otro hilo. La versión en proceso ofrece plazos para colas y esperas, pero no garantiza cortar una llamada nativa colgada. Si una llamada FFI supera su plazo, se marca no utilizable el motor compartido completo, se rechazan comandos nuevos y se exige reiniciar el proceso Python. Liberar una reserva no recupera ese motor y no se descargan DLLs con llamadas en curso. Un proceso auxiliar para aislamiento y recuperación queda como evolución condicionada a evidencia, con coste y alcance propios.
+Una llamada nativa bloqueada puede requerir reiniciar Python. Un bloqueo dentro de un proveedor lo deja fuera de servicio y los otros proveedores siguen disponibles. Un bloqueo del coordinador puede dejar fuera de servicio el motor compartido.
 
-Los errores públicos distinguen colisión del parche, plataforma no soportada, bridge no disponible, timeout, coincidencia ambigua, ventana obsoleta y acción fallida. Todos heredan de `DesktopError`; `DesktopTimeoutError` también será compatible con el `TimeoutError` público de Playwright. Rust devuelve códigos y contexto estructurado, y Python conserva la causa al traducirlos.
+Los errores públicos distinguen colisión del parche, plataforma no soportada, bridge no disponible, timeout, coincidencia ambigua, ventana obsoleta y acción fallida. Todos heredan de `DesktopError`. `DesktopTimeoutError` también hereda del `TimeoutError` público de Playwright. Rust devuelve códigos y contexto estructurado, y Python conserva la causa al traducirlos.
 
 ## Criterios de aceptación y rendimiento
 

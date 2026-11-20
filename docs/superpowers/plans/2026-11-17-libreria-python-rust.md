@@ -1,29 +1,27 @@
 # playwright-desktop — plan de implementación
 
-**Objetivo.** Extender las clases `Page` oficiales mediante una importación y automatizar el formulario Swing de la demo desde `page.desktop` con un motor Rust.
+**Objetivo.** Extender las clases `Page` oficiales mediante una importación y automatizar controles de escritorio de Windows desde `page.desktop`.
 
-**Arquitectura.** Fachadas Python sync y async sobre un binding PyO3. Un worker Rust por proceso integra `windows-rs` y Java Access Bridge, con recursos confinados a su hilo, selección estricta y operaciones nativas seriales.
+**Arquitectura.** Fachadas Python sync y async sobre un binding PyO3. El coordinador Rust gestiona las sesiones y delega el acceso al adaptador de Windows. Java Access Bridge (JAB) y UI Automation (UIA) conservan sus recursos en hilos independientes.
 
 **Tecnologías.** Python 3.10–3.14 convencional, Playwright 1.63–1.65, Maturin, PyO3 0.30.1, `windows` 0.62.2, Rust MSVC 1.85+, OpenJDK 11+ y Windows x64. La tarea 7 registra la validación de las versiones declaradas.
 
 **Especificación.** [Arquitectura y contrato](../specs/2026-11-17-libreria-python-rust-design.md).
 
-**Estado.** Las tareas 1 a 5 están cerradas. El siguiente corte corresponde al recorrido completo de la demo en la tarea 6.
+**Estado.** En validación. Las tareas 1 a 5 y el [plan de Windows nativo](2026-11-19-windows-nativo-uia.md) están cerrados. Quedan por verificar el recorrido completo, la compatibilidad y el rendimiento.
 
 Marca cada paso al cumplir su criterio de cierre y registra allí la evidencia. Si una comprobación se registra en otro plan, enlaza su tarea.
 
 ## Restricciones globales
 
-La automatización de la demo utiliza **Page Object Model (POM)** y un único escenario funcional. El test contiene el recorrido, sus aserciones, la importación de `playwright_desktop` y la llamada a `page.desktop.expect_window()`. El Page Object Java recibe la ventana capturada mediante `opened.value` y encapsula los locators y las acciones. `fixtures/` prepara el navegador y el runtime, `config.py` contiene la configuración y `utils/` extrae el texto del PDF. Mantener unittest, sin nuevas dependencias ni capas genéricas de acciones. Las pruebas del motor pertenecen a la librería.
-
-El runner comprueba que la demo ya esté en ejecución y utiliza un perfil temporal de navegador, salvo que se haya preparado uno para extensiones. Los comandos de la demo evitan escribir caché de bytecode Python. El runner no genera capturas, JSON de descargas ni logs Java automáticamente.
+La automatización de la demo utiliza **Page Object Model (POM)** y unittest. CP-PI-01 captura la ventana Java con `page.desktop.expect_window()` y valida los datos y el PDF. CP-PI-02 acciona la apertura desde la interfaz del navegador. Las pruebas del motor pertenecen a `lib/`.
 
 - Implementación distribuible dentro de `lib/`; demo en `demo/pc-info/` y toda su automatización mediante la librería en `demo/pc-info-automation/`.
 - El usuario conserva imports, fixtures y métodos web oficiales. Solo añade `import playwright_desktop`.
 - Añadir exclusivamente `Page.desktop`, tanto a la clase pública sync como a la async.
-- Carga del motor diferida, configuración JAB explícita y sin cambios automáticos de accesibilidad al importar.
-- Un motor JAB por proceso y un flujo desktop activo; ejecución nativa serial en el escritorio compartido.
-- Sin OCR, coordenadas, control de instaladores, backend UIA o servicios externos en esta versión.
+- Carga del motor diferida y selección del proveedor por ventana. JAB toma la configuración de Java cuando aplica.
+- Un flujo desktop activo por proceso de pruebas, con operaciones de cada proveedor en su hilo.
+- Sin OCR, coordenadas, control de instaladores ni servicios externos.
 - Sin dependencias de automatización adicionales. Usar bibliotecas estándar para concurrencia y pruebas unitarias.
 - Compilar e instalar con Python global. La ejecución de un wheel precompilado no requiere el toolchain Rust.
 - Las pruebas nativas requieren una sesión Windows interactiva. Las verificaciones sin JVM no acreditan el recorrido real.
@@ -35,7 +33,7 @@ El runner comprueba que la demo ya esté en ejecución y utiliza un perfil tempo
 | Colisión de `Page.desktop` o recarga del paquete | Prevalidación de ambas clases, idempotencia y ausencia de parche parcial. | 2 |
 | DLL, bitness o layout JAB incorrectos | Diagnóstico antes de actuar y ABI contrastada con headers reales. | 3 |
 | Dos ventanas similares, controles repetidos o HWND reutilizado | Error explícito; ninguna acción sobre una coincidencia arbitraria. | 4 |
-| Cancelación, cierre de `Page` o JVM sin respuesta | Cancelar comandos pendientes, liberar reservas y rechazar un motor bloqueado. | 5 |
+| Cancelación, cierre de `Page` o JVM sin respuesta | Cancelar comandos pendientes, liberar reservas y aislar un proveedor bloqueado. | 5 |
 | Demo funciona por API pero no desde el navegador | Verificación real de ClickOnce, Java, retorno web y PDF con valores editados. | 6 |
 
 ## Tarea 1 — paquete mixto y primer wheel
@@ -44,8 +42,8 @@ El runner comprueba que la demo ya esté en ejecución y utiliza un perfil tempo
 
 **Contrato:** el módulo `playwright_desktop._native` exporta `binding_version() -> str`; importar el paquete no crea hilos nativos ni carga JAB. El nombre de módulo coincide en Maturin, Cargo y `#[pymodule]`.
 
-- [x] Configurar el paquete mixto y construir un wheel Windows x64 con el `Cargo.lock` del proyecto. Entorno verificado con Python 3.14.4, Rust 1.100.0 y Maturin 1.16.0. El comando actual es `lib/scripts/build_py.ps1`.
-- [x] Instalar el wheel en Python global e importar el módulo nativo fuera del repositorio. Playwright 1.63.0 fue la versión instalada para la comprobación.
+- [x] Configurar el paquete mixto y construir un wheel Windows x64 con `lib/scripts/build_py.ps1` y el `Cargo.lock` del proyecto.
+- [x] Instalar el wheel e importar el módulo nativo fuera del árbol de fuentes.
 
 ## Tarea 2 — parche y contrato Python
 
@@ -68,15 +66,13 @@ El runner comprueba que la demo ya esté en ejecución y utiliza un perfil tempo
 - [x] Cargar el bridge e identificar la raíz de un formulario real en Windows. El lanzador activa el puente al iniciar Java.
 - [x] Comprobar los diagnósticos de ruta Java sin configurar, DLL ausente, arquitectura x86 y símbolo `Windows_run` faltante.
 - [x] Rechazar una lectura si el rango UTF-16 termina antes de la longitud anunciada o carece de terminador. Las pruebas verifican la liberación del candidato y de los hijos pendientes si falla la decodificación del árbol.
-- [x] Verificar Swing con JDK 11.0.21. La ventana visible agotó la espera con Java Access Bridge deshabilitado en un perfil temporal. Al habilitar el bridge en el proceso JVM, se leyó y editó el mismo control con 1.023 unidades UTF-16, incluido un carácter suplementario.
-
-**Verificación del corte.** Pasaron 8 pruebas Rust y 24 pruebas Python contra un wheel Windows x64 recién compilado.
+- [x] Leer y editar un control Swing con 1.023 unidades UTF-16, incluido un carácter suplementario, con el bridge habilitado en la JVM.
 
 ## Tarea 4 — selección y operaciones básicas
 
 **Archivos.** `lib/rust/src/engine.rs`, `lib/rust/src/jab/{mod.rs,loader.rs,tests.rs}`, `lib/tests/test_selection.py` y `lib/tests/fixtures/SelectionForm.java`.
 
-**Contrato nativo:** `open_session(java_home) -> session_id`, `new_request(session_id, timeout_ms) -> request_id`, `prepare_window(session_id, title, pid, request_id) -> capture_id`, `wait_window(capture_id, request_id) -> window_id`, `attach_window(session_id, title, pid, request_id) -> window_id`, `read_text(window_id, role, name, request_id) -> str`, `fill(window_id, role, name, text, request_id) -> None`, `click(window_id, role, name, request_id) -> None`, `wait_closed(window_id, request_id) -> None`, `cancel_request(request_id) -> None` y `close_session(session_id) -> None`. `new_request` registra sin esperar al worker el identificador, el plazo monótono y el estado de cancelación; por eso se puede cancelar incluso antes de que comience `to_thread`. La preparación y espera de una captura comparten el plazo original. El binding puede encapsular estos identificadores en objetos Python internos; no son la API pública del usuario.
+**Contrato nativo.** El binding abre una sesión con `open_auto_session()`, crea solicitudes cancelables con `new_request()` y despacha los comandos mediante `invoke()`. La preparación y espera de una captura comparten el plazo original. [_native.pyi](../../../lib/python/playwright_desktop/_native.pyi)
 
 - [x] Implementar el recorrido iterativo con límites, la normalización de rol y estado, `fill` con lectura de comprobación y el clic mediante una única acción accesible.
 - [x] Implementar reserva y vinculación de la ventana. La comprobación con Java iniciado de forma directa verificó captura, lectura, edición, confirmación y cierre mediante `page.desktop`.
@@ -84,7 +80,7 @@ El runner comprueba que la demo ya esté en ejecución y utiliza un perfil tempo
 - [x] Rechazar un árbol que supere 4.096 nodos o 64 niveles de profundidad antes de pedir referencias fuera del límite, incluso si ya hay un candidato.
 - [x] Verificar que `expect_window()` conserva la reserva tras la captura y que se libera cuando se cierra la ventana, llega el evento de cierre de la página o termina la sesión. Una prueba con un HWND real y una raíz Java simulada verifica que el motor rechaza una acción si cambia la raíz asociada.
 
-**Verificación del corte.** Pasaron 11 pruebas Rust y 28 pruebas Python contra un wheel Windows x64 recién compilado. Se ejecutaron los cuatro casos de Swing con JDK 11.0.21. Para repetirlos en una sesión interactiva de Windows, indica el JDK en `PLAYWRIGHT_DESKTOP_TEST_JAVA_HOME` y ejecuta `py -m unittest discover -s lib/tests -p test_selection.py -v`.
+Para repetir las pruebas Swing en una sesión interactiva de Windows, indica el JDK en `PLAYWRIGHT_DESKTOP_TEST_JAVA_HOME` y ejecuta `py -m unittest discover -s lib/tests -p test_selection.py -v`.
 
 ## Tarea 5 — worker, integración sync/async y recuperación
 
@@ -94,16 +90,11 @@ El runner comprueba que la demo ya esté en ejecución y utiliza un perfil tempo
 
 - [x] Implementar el worker con cola y mensajes Windows, `Python::detach`, `asyncio.to_thread` para las llamadas nativas y solicitudes cancelables antes de encolar. Las pruebas cubren plazos monótonos, cancelación previa y durante una operación nativa, respuesta del bucle durante una espera y cierre de sesión.
 - [x] Traducir los errores nativos a Python y comprobar que el timeout se puede capturar mediante el tipo público de Playwright.
-- [x] Ejecutar 19 pruebas Python contra el wheel instalado y 4 pruebas Rust en el corte de la base inicial.
 - [x] Cubrir las regresiones de ciclo de vida en `lib/tests/` y Rust. Una petición corta en cola puede vencer sin invalidar una petición activa con plazo vigente. El bucle async responde durante un inicio nativo lento. Una preparación cancelada libera la reserva antes de la siguiente solicitud, incluso si ya la había tomado. Una raíz Java obsoleta libera su ventana.
 - [x] Verificar que el worker consulta y libera las referencias JAB en su hilo, que se rechaza un segundo runtime y que el acceso a una página real de Playwright y su evento de cierre ocurren en el bucle original. La prueba de la página usó un motor de escritorio simulado.
 - [x] Verificar timeout cero, cierre de página, cierre externo de ventana, recolección y cierre explícito con solicitudes pendientes. Las pruebas del worker confirman que los comandos cancelados, vencidos o de sesiones cerradas se descartan antes de actuar.
-- [x] Simular una llamada JAB bloqueada con un doble controlable. Al vencer el plazo, el motor informa un timeout e indica reiniciar Python. Rechaza las solicitudes en cola y las nuevas aunque el doble se libere. La prueba libera el doble y espera el fin del hilo.
-- [x] Reconstruir el wheel Windows x64 desde un directorio de compilación nuevo, instalarlo en una carpeta temporal y repetir las pruebas Python y Rust.
-
-**Verificación del primer corte.** Pasaron 15 pruebas Rust y 37 Python contra un wheel Windows x64 del corte, incluidas las pruebas Swing con JDK 11.0.21. También se verificó el evento de cierre de una página de Playwright en Edge sin interfaz.
-
-**Verificación del cierre.** Pasaron 16 pruebas Rust y 37 Python. Se comprobó la importación de la extensión nativa desde la instalación temporal del wheel y se ejecutaron las pruebas Swing con JDK 11.0.21.
+- [x] Simular una llamada bloqueada con un doble controlable. El proveedor queda fuera de servicio y otro proveedor sigue atendiendo. La prueba libera el doble y verifica que el proveedor bloqueado siga aislado.
+- [x] Verificar la importación del wheel Windows x64 y ejecutar las suites Python y Rust, incluidas las pruebas Swing.
 
 ## Tarea 6 — recorrido real de la demo
 
@@ -111,19 +102,19 @@ El runner comprueba que la demo ya esté en ejecución y utiliza un perfil tempo
 
 **Consume:** demo compilada, navegador compatible con ClickOnce y wheel instalado. **Produce:** evidencia de la integración de `page.desktop` con la clase oficial `Page`.
 
-Ejecutar en serie las verificaciones de escritorio. La captura debe distinguir las ventanas de la operación mediante los filtros y criterios de la [tarea 4 de la librería](#tarea-4--selección-y-operaciones-básicas). El cierre también requiere aprobar PC-01 con Python sync y revisar la vista previa del PDF, según la [tarea 4 de pc-info](2026-11-17-demo-clickonce-java.md#tarea-4--recorrido-y-documentación).
+Ejecutar en serie las verificaciones de escritorio. La captura debe distinguir las ventanas de la operación mediante los filtros y criterios de la [tarea 4 de la librería](#tarea-4--selección-y-operaciones-básicas). El cierre requiere completar CP-PI-01 en sync, cuya evidencia se registra en el [plan de activación ClickOnce](2026-11-19-pc-info-activacion-clickonce.md#tarea-2--activación-completa).
 
-- [x] Organizar un único escenario funcional sync con POM, configuración y fixtures. Se ejecuta con `py demo/pc-info-automation/run.py` y la demo ya levantada. Las comprobaciones técnicas del motor pertenecen a `lib/`.
-- [x] Verificar por separado la web y el contenido textual del PDF en Edge headless, simulando la confirmación HTTP. Con Java iniciado directamente también pasaron la captura, la edición, el cierre y las comprobaciones de la web y del PDF.
-- [ ] Diagnosticar la espera de `expect_window()` tras la [activación de ClickOnce](2026-11-17-demo-clickonce-java.md#tarea-3--lanzador-y-publicación). Registrar el título, los tiempos y los errores observados. **Cierre.** Se captura la ventana de la operación y la limpieza se limita a los procesos del flujo. El 19 de noviembre de 2026, PC-01 agotó la espera de Java al solicitar la apertura desde Edge.
-- [ ] Verificar la API async de la librería con los resultados esperados de [PC-01](../../../demo/pc-info-automation/test_plan.md#caso-pc-01--confirmar-datos-y-generar-el-pdf). Las regresiones de cancelación y respuesta del bucle se cubren en la [tarea 5](#tarea-5--worker-integración-syncasync-y-recuperación). Mantener un único escenario sync en la automatización de ejemplo.
-- [ ] Verificar una página creada antes y otra después de importar la extensión.
+- [x] Organizar la automatización sync con POM y documentar los [comandos de CP-PI-01 y CP-PI-02](../../../demo/README.md#ejecutar-pc-info-automation).
+- [x] Verificar CP-PI-02 en Edge y Chrome con el filtro de título por prefijo. [Resultados del clic de apertura](2026-11-19-pc-info-activacion-clickonce.md#tarea-1--clic-de-apertura-desde-el-navegador).
+- [x] Verificar captura, edición, cierre, retorno a la web y contenido textual del PDF con Java iniciado directamente.
+- [ ] Verificar la API async con los resultados esperados de [CP-PI-01](../../../demo/pc-info-automation/test_plan.md#caso-cp-pi-01--confirmar-datos-y-generar-el-pdf). Las pruebas de la librería ya cubren el clic nativo, la cancelación y la respuesta del bucle.
+- [x] Verificar una página creada antes y otra después de importar la extensión. Ambas páginas reales de Playwright expusieron `page.desktop` tras la importación.
 
 ## Tarea 7 — compatibilidad, rendimiento y revisión final
 
 **Archivos.** `lib/pyproject.toml`, `lib/README.md`, README principal y documentación técnica.
 
-- [ ] Completar la matriz del wheel fuera del repositorio. **Cierre.** Construcción e importación verificadas con CPython 3.10 convencional x64 y comprobación con Playwright 1.65.2. Usar como referencia CPython 3.14 y Playwright 1.63.0 ya verificados. Ajustar los rangos declarados a la evidencia.
+- [ ] Completar la matriz del wheel con CPython 3.10 x64. Conservar como referencia las verificaciones con Python 3.14 y Playwright 1.65.2 y ajustar los rangos declarados según los resultados.
 - [ ] Medir inicialización, búsquedas, lecturas, ediciones y acciones del motor en release, con el formulario Java ya abierto. **Cierre.** Registrar p50/p95, número de muestras, condiciones reproducibles y liberación de sesiones, objetos JAB e hilos tras operaciones repetidas.
 - [ ] Revisar el contrato público y la documentación. **Cierre.** Instalación, API sync/async, configuración del runtime, tipado, errores y límites de sesión coinciden con las comprobaciones registradas. Hacer una revisión independiente de ABI, propiedad de recursos, colisiones y efectos tardíos y repetir las comprobaciones afectadas.
 
