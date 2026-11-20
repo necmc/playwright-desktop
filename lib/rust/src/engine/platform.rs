@@ -35,11 +35,21 @@ pub(super) struct WindowQuery {
 }
 
 impl WindowQuery {
-    pub(super) fn validate(&self) -> Result<()> {
+    pub(super) fn validate_capture(&self) -> Result<()> {
         if (!self.title.is_empty() && !self.title_prefix.is_empty())
             || self.title.contains('\0') || self.title_prefix.contains('\0') || self.has_text.contains('\0')
-            || (self.title.is_empty() && self.title_prefix.is_empty() && self.pid.is_none() && self.has_text.is_empty())
         {
+            return Err(Failure::new(
+                "CONFIGURATION",
+                "Use an exact title, a title prefix, a PID or visible text. Do not combine the two title filters.",
+            ));
+        }
+        Ok(())
+    }
+
+    pub(super) fn validate(&self) -> Result<()> {
+        self.validate_capture()?;
+        if self.title.is_empty() && self.title_prefix.is_empty() && self.pid.is_none() && self.has_text.is_empty() {
             return Err(Failure::new(
                 "CONFIGURATION",
                 "Use an exact title, a title prefix, a PID or visible text. Do not combine the two title filters.",
@@ -90,6 +100,7 @@ pub(super) trait Platform {
         self.candidates(query).map(CandidateSearch::Ready)
     }
     fn window_key(&self, window: &Self::Window) -> Self::WindowKey;
+    fn window_metadata(&self, window: &Self::Window) -> (u32, String);
     fn is_window_alive(&self, window: &Self::Window) -> bool;
     fn prepare_capture(&mut self, request: Arc<RequestState>) -> Result<Option<CapturePreparation>>;
     fn resolve_provider(

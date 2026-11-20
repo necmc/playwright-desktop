@@ -38,6 +38,10 @@ impl Platform for FakePlatform {
         window.0
     }
 
+    fn window_metadata(&self, window: &Self::Window) -> (u32, String) {
+        (window.0, window.1.to_string())
+    }
+
     fn is_window_alive(&self, window: &Self::Window) -> bool {
         self.windows.contains(window)
     }
@@ -243,7 +247,7 @@ fn a_short_queued_deadline_does_not_poison_an_active_call_with_time_left() {
     }).unwrap();
 
     let (sender, receiver) = mpsc::channel();
-    sender.send(Ok(Reply { handle: 7, text: None })).unwrap();
+    sender.send(Ok(Reply::handle(7))).unwrap();
     assert_eq!(shared.wait_for_reply(&active, receiver).unwrap().handle, 7);
     worker.process_pending(&mut pending);
     assert!(pending.is_empty());
@@ -313,4 +317,83 @@ fn cancelling_a_queued_preparation_after_reservation_releases_it_before_the_next
     let capture = second_reply.try_recv().unwrap().expect("the next preparation can reserve the engine").handle;
     assert!(!worker.captures.contains_key(&previous_capture));
     assert!(worker.captures.contains_key(&capture));
+}
+
+#[test]
+fn same_session_can_hold_multiple_handles_with_metadata_while_blocking_other_sessions() {
+    let mut worker = test_worker();
+    let owner = session(1);
+    let other = session(2);
+    worker.shared.sessions.lock().unwrap().insert(owner.id, owner.clone());
+    worker.shared.sessions.lock().unwrap().insert(other.id, other.clone());
+    let deadline = Instant::now() + Duration::from_secs(10);
+
+    // Captura 1: ventana principal de una App.
+    let (mut prep_a, _) = command(request(owner.clone(), deadline), Operation::PrepareCapture, Arguments {
+        window: WindowQuery::default(), ..Arguments::default()
+    });
+    let cap_a = worker.step(&mut prep_a).unwrap().unwrap().handle;
+    worker.platform.windows.push((101, "Launcher"));
+    let (mut comp_a, _) = command(request(owner.clone(), deadline), Operation::CompleteCapture, Arguments {
+        capture_id: cap_a, ..Arguments::default()
+    });
+    let reply_a = worker.step(&mut comp_a).unwrap().unwrap();
+    assert_eq!(reply_a.pid, Some(101));
+    assert_eq!(reply_a.title.as_deref(), Some("Launcher"));
+
+    // Captura 2 dentro de la misma sesión: otra ventana/app coexiste con la primera.
+    let (mut prep_b, _) = command(request(owner.clone(), deadline), Operation::PrepareCapture, Arguments {
+        window: WindowQuery { title: "Alerta".into(), ..WindowQuery::default() }, ..Arguments::default()
+    });
+    let cap_b = worker.step(&mut prep_b).unwrap().unwrap().handle;
+    worker.platform.windows.push((2, "Alerta"));
+    let (mut comp_b, _) = command(request(owner.clone(), deadline), Operation::CompleteCapture, Arguments {
+        capture_id: cap_b, ..Arguments::default()
+    });
+    let reply_b = worker.step(&mut comp_b).unwrap().unwrap();
+    assert_ne!(reply_a.handle, reply_b.handle);
+    assert_eq!(reply_b.pid, Some(2));
+    assert_eq!(reply_b.title.as_deref(), Some("Alerta"));
+
+    // Una acción UIA sobre un handle capturado también conserva pid y title en Reply.
+    let (mut action_b, _) = command(request(owner.clone(), deadline), Operation::Window(WindowOperation::Click), Arguments {
+        window_id: reply_b.handle,
+        control: ControlQuery { name: "Aceptar".into(), ..ControlQuery::default() },
+        ..Arguments::default()
+    });
+    assert!(worker.step(&mut action_b).unwrap().is_none());
+    assert!(worker.step(&mut action_b).unwrap().is_none());
+    let action_reply = worker.step(&mut action_b).unwrap().unwrap();
+    assert_eq!(action_reply.handle, reply_b.handle);
+    assert_eq!(action_reply.pid, Some(2));
+    assert_eq!(action_reply.title.as_deref(), Some("Alerta"));
+
+    // La búsqueda directa sin filtros (no captura) sigue exigiendo criterio en validate().
+    assert_eq!(WindowQuery::default().validate().unwrap_err().code, "CONFIGURATION");
+    let conflict = WindowQuery { title: "A".into(), title_prefix: "B".into(), ..WindowQuery::default() };
+    assert_eq!(conflict.validate_capture().unwrap_err().code, "CONFIGURATION");
+
+    // Otra sesión distinta queda bloqueada con BUSY mientras owner tenga ventanas activas.
+    let (mut blocked, _) = command(request(other.clone(), deadline), Operation::PrepareCapture, Arguments {
+        window: WindowQuery { title: "Otra".into(), ..WindowQuery::default() }, ..Arguments::default()
+    });
+    assert_eq!(worker.step(&mut blocked).unwrap_err().code, "BUSY");
+
+    // Se cierra solo la segunda ventana; la primera permanece operativa en la misma sesión.
+    worker.platform.windows.retain(|(id, _)| *id != 2);
+    worker.cleanup();
+    let (mut click_b, _) = command(request(owner.clone(), deadline), Operation::Window(WindowOperation::Click), Arguments {
+        window_id: reply_b.handle, control: ControlQuery { name: "Aceptar".into(), ..ControlQuery::default() }, ..Arguments::default()
+    });
+    assert_eq!(worker.step(&mut click_b).unwrap_err().code, "STALE");
+    assert!(worker.windows.contains_key(&reply_a.handle));
+
+    // Al cerrar la sesión dueña, se liberan todos sus handles y otra sesión puede operar.
+    Engine { shared: worker.shared.clone() }.close_session(owner.id);
+    worker.cleanup();
+    assert!(worker.windows.is_empty());
+    let (mut unblocked, _) = command(request(other, deadline), Operation::PrepareCapture, Arguments {
+        window: WindowQuery { title: "Otra".into(), ..WindowQuery::default() }, ..Arguments::default()
+    });
+    assert!(worker.step(&mut unblocked).unwrap().is_some());
 }

@@ -129,10 +129,18 @@ struct Arguments {
 }
 
 #[pyclass]
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct Reply {
     #[pyo3(get)] pub handle: u64,
     #[pyo3(get)] pub text: Option<String>,
+    #[pyo3(get)] pub pid: Option<u32>,
+    #[pyo3(get)] pub title: Option<String>,
+}
+
+impl Reply {
+    fn handle(handle: u64) -> Self {
+        Self { handle, ..Self::default() }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -491,7 +499,11 @@ impl<P: Platform> Worker<P> {
     ) -> Result<Option<u64>> {
         let session = request.session.id;
         self.require_owner(session)?;
-        query.validate()?;
+        if capture.is_some() {
+            query.validate_capture()?;
+        } else {
+            query.validate()?;
+        }
         let mut candidates = candidates.into_iter()
             .filter(|window| !capture.is_some_and(|(_, before)| before.contains(&self.platform.window_key(window))));
         let Some(candidate) = candidates.next() else { return Ok(None); };
@@ -574,7 +586,7 @@ impl<P: Platform> Worker<P> {
                     return Ok(None);
                 };
                 match response {
-                    Ok(Some(result)) => Ok(Some(Reply { handle: id, text: result.text })),
+                    Ok(Some(result)) => Ok(Some(self.reply_for_window(id, result.text))),
                     Ok(None) => Ok(None),
                     Err(error) => {
                         if error.code == "STALE" { self.invalidate_window(id); }
@@ -585,10 +597,18 @@ impl<P: Platform> Worker<P> {
         }
     }
 
+    fn reply_for_window(&self, id: u64, text: Option<String>) -> Reply {
+        if let Some(entry) = self.windows.get(&id) {
+            let (pid, title) = self.platform.window_metadata(&entry.window);
+            return Reply { handle: id, text, pid: Some(pid), title: Some(title) };
+        }
+        Reply { handle: id, text, pid: None, title: None }
+    }
+
     fn prepare_capture(&mut self, request: &Arc<RequestState>, args: &Arguments) -> Result<Option<Reply>> {
         let session = request.session.id;
         self.require_owner(session)?;
-        args.window.validate()?;
+        args.window.validate_capture()?;
         let before = self.platform.candidates(&args.window)?.iter()
             .map(|window| self.platform.window_key(window)).collect();
         request.check()?;
@@ -596,7 +616,7 @@ impl<P: Platform> Worker<P> {
         self.captures.insert(id, Capture {
             session, query: args.window.clone(), before, request: request.clone(),
         });
-        Ok(Some(Reply { handle: id, text: None }))
+        Ok(Some(Reply::handle(id)))
     }
 
     fn complete_capture(&mut self, request: &RequestState, capture_id: u64) -> Result<Option<Reply>> {
@@ -609,7 +629,7 @@ impl<P: Platform> Worker<P> {
             return Ok(None);
         };
         self.captures.remove(&capture_id);
-        Ok(Some(Reply { handle: id, text: None }))
+        Ok(Some(self.reply_for_window(id, None)))
     }
 
     fn operate_window(&mut self, command: &mut ActiveCommand<P>, operation: WindowOperation) -> Result<Option<Reply>> {
@@ -637,12 +657,12 @@ impl<P: Platform> Worker<P> {
         let session = request.session.id;
         let waiting_for_close = operation == WindowOperation::WaitClosed;
         if waiting_for_close && self.closed.get(&id) == Some(&session) {
-            return Ok(Some(Reply { handle: id, text: None }));
+            return Ok(Some(Reply::handle(id)));
         }
         let item = self.window(id, session)?;
         if !self.platform.is_window_alive(&item.window) {
             self.invalidate_window(id);
-            if waiting_for_close { return Ok(Some(Reply { handle: id, text: None })); }
+            if waiting_for_close { return Ok(Some(Reply::handle(id))); }
             return Err(Failure::new("STALE", "The native window no longer exists."));
         }
         if waiting_for_close {

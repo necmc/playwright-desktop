@@ -202,6 +202,10 @@ impl Platform for WindowsPlatform {
         (window.hwnd, window.pid)
     }
 
+    fn window_metadata(&self, window: &Self::Window) -> (u32, String) {
+        (window.pid, window.title.clone())
+    }
+
     fn is_window_alive(&self, window: &Self::Window) -> bool {
         windows::valid(window)
     }
