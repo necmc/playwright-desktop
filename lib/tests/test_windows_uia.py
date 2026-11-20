@@ -121,6 +121,9 @@ class WindowsUiaTests(unittest.TestCase):
                 self.assertEqual(alias.input_value(), "Swing")
                 alias.fill("Swing confirmado")
                 self.assertEqual(alias.input_value(), "Swing confirmado")
+                with self.assertRaisesRegex(ValueError, "1023 UTF-16"):
+                    alias.fill("\U00010400" * 512)
+                self.assertEqual(alias.input_value(), "Swing confirmado")
                 swing.get_by_role("button", name="Cerrar").click()
                 swing.wait_for_closed()
                 native.get_by_role("group", name="Opciones integradas").get_by_role("button", name="Aplicar").click()

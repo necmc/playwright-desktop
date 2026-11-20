@@ -7,9 +7,6 @@ from pathlib import Path
 from ._errors import DesktopError
 from ._platform import require_supported_platform
 
-MAX_JAB_TEXT_UNITS = 1023
-
-
 def load_extension():
     require_supported_platform()
     try:
@@ -31,8 +28,3 @@ def session_argument(java_home: str | None) -> str | None:
     if configured := os.environ.get("JAVA_HOME"):
         return normalize_java_home(configured)
     return None
-
-
-def validate_text_capacity(utf16_units: int) -> None:
-    if utf16_units > MAX_JAB_TEXT_UNITS:
-        raise ValueError(f"Java Access Bridge accepts at most {MAX_JAB_TEXT_UNITS} UTF-16 code units.")

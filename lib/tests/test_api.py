@@ -72,10 +72,10 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(request.call_args.kwargs["scope_name"], "Descargas")
         self.assertEqual(request.call_args.kwargs["role"], "link")
 
-    def test_text_limit_counts_utf16_units_and_rejects_surrogates(self):
-        validate_text("\U00010400" * 511 + "A")
+    def test_common_text_validation_accepts_long_unicode_and_rejects_invalid_text(self):
+        validate_text("\U00010400" * 512)
         validate_text("")
-        for text in ("\U00010400" * 512, "A\0B", "\ud800"):
+        for text in ("A\0B", "\ud800"):
             with self.assertRaises(ValueError):
                 validate_text(text)
 

@@ -2,8 +2,6 @@
 
 from dataclasses import dataclass
 
-from ._backend import validate_text_capacity
-
 MAX_TIMEOUT_MS = 2**32 - 1
 MAX_PROCESS_ID = 2**32 - 1
 CLICK_ROLES = ("button", "link", "menuitem")
@@ -13,7 +11,7 @@ SCOPE_ROLES = ("dialog", "group", "menu", "listitem")
 def validate_string(value: str, label: str) -> str:
     if not isinstance(value, str) or not value or "\0" in value:
         raise ValueError(f"{label} must be a nonempty string without NUL characters.")
-    _utf16(value, label)
+    _validate_unicode(value, label)
     return value
 
 
@@ -64,11 +62,11 @@ def validate_action_role(role: str, required_role: str, action: str) -> None:
 def validate_text(text: str) -> None:
     if not isinstance(text, str) or "\0" in text:
         raise ValueError("text must be a string without NUL characters.")
-    validate_text_capacity(len(_utf16(text, "text")) // 2)
+    _validate_unicode(text, "text")
 
 
-def _utf16(value: str, label: str) -> bytes:
+def _validate_unicode(value: str, label: str) -> None:
     try:
-        return value.encode("utf-16-le")
+        value.encode("utf-8")
     except UnicodeEncodeError as error:
         raise ValueError(f"{label} contains invalid Unicode.") from error

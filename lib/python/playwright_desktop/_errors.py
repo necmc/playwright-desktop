@@ -48,6 +48,7 @@ class UnsupportedPlatformError(DesktopError):
 
 
 NATIVE_ERRORS = {
+    "INVALID_ARGUMENT": ValueError,
     "TIMEOUT": DesktopTimeoutError,
     "CONFIGURATION": DesktopConfigurationError,
     "BRIDGE": BridgeUnavailableError,

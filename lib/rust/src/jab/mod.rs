@@ -125,10 +125,13 @@ impl Object {
     }
 
     pub fn fill(&self, text: &str, check: &dyn Fn() -> Result<()>) -> Result<()> {
-        let value: Vec<u16> = text.encode_utf16().chain(Some(0)).collect();
-        if value.len() > MAX_TEXT || value[..value.len()-1].contains(&0) {
-            return Err(Failure::new("ACTION", "Text must fit in 1023 UTF-16 code units without embedded NUL."));
+        let mut value: Vec<u16> = text.encode_utf16().take(MAX_TEXT).collect();
+        if value.len() == MAX_TEXT || value.contains(&0) {
+            return Err(Failure::new("INVALID_ARGUMENT", format!(
+                "Java Access Bridge accepts at most {} UTF-16 code units without embedded NUL.", MAX_TEXT - 1
+            )));
         }
+        value.push(0);
         check()?;
         // SAFETY: value is NUL-terminated with checked size, context is live and editable.
         if unsafe { (self.0.library.set_text)(self.0.vm, self.0.object, value.as_ptr()) } == 0 {
