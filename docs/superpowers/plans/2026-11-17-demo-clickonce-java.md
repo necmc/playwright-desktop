@@ -8,7 +8,7 @@
 
 **Especificación.** [Diseño de pc-info](../specs/2026-11-17-demo-clickonce-java-design.md).
 
-**Estado.** En validación. La web, el formulario y el lanzador están implementados. Faltan la prueba de reintento y la revisión final. El recorrido completo de CP-PI-01 se sigue en el [plan de activación ClickOnce](2026-11-19-pc-info-activacion-clickonce.md).
+**Estado.** Cerrado. La web, el formulario, el lanzador, el reintento ante fallo en Java, la revisión final y `CP-PI-01` en Edge quedaron verificados. El detalle de la activación se registra en el [plan de activación ClickOnce](2026-11-19-pc-info-activacion-clickonce.md).
 
 ## Restricciones globales
 
@@ -44,7 +44,7 @@ Archivo principal `demo/pc-info/desktop-java/src/InformationForm.java`. Recibe u
 - [x] Implementar validación y envío fuera del hilo de UI, conservación de valores ante fallos y cancelación al cerrar.
 - [x] Compilar para Java 11.
 - [x] Verificar con OpenJDK 11 el formulario en arranque directo.
-- [ ] Reproducir un fallo de entrega en Java y comprobar que el reintento conserva los valores y completa la operación.
+- [x] Reproducir un fallo de entrega en Java y comprobar que el reintento conserva los valores y completa la operación. (Verificado con `InformationForm.jar` ante fallo HTTP 500 simulado en el primer `POST /result`, diálogo `"No se pudo confirmar"`, conservación de los 3 campos y PDF generado tras el reintento).
 
 ## Tarea 3 — lanzador y publicación
 
@@ -63,4 +63,4 @@ La [tarea de activación completa](2026-11-19-pc-info-activacion-clickonce.md#ta
 - [x] Documentar el arranque y la ejecución de la automatización en `demo/README.md`.
 - [x] Documentar el intercambio entre los componentes en la [documentación técnica](../../documentacion-tecnica.md).
 - [x] Verificar el clic de CP-PI-02 en la bandeja de descargas de Edge. Las comprobaciones por interfaz y navegador se registran en el [plan de activación ClickOnce](2026-11-19-pc-info-activacion-clickonce.md#tarea-1--clic-de-apertura-desde-el-navegador).
-- [ ] Ejecutar una revisión final independiente de la demo y corregir los hallazgos antes de entregar. Usar la evidencia de CP-PI-01.
+- [x] Ejecutar una revisión final independiente de la demo y corregir los hallazgos antes de entregar. Usar la evidencia de CP-PI-01. (Corregida la codificación de `"Información del equipo"` en `build.ps1` para PowerShell 5.1 y la limpieza de versiones previas en `publish/Application Files`).

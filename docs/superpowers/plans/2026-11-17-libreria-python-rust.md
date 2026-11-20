@@ -8,7 +8,7 @@
 
 **Especificación.** [Arquitectura y contrato](../specs/2026-11-17-libreria-python-rust-design.md).
 
-**Estado.** En validación. Las tareas 1 a 5 y el [plan de Windows nativo](2026-11-19-windows-nativo-uia.md) están cerrados. Quedan por verificar el recorrido completo, la compatibilidad y el rendimiento.
+**Estado.** En validación. Las tareas 1 a 5, el [plan de Windows nativo](2026-11-19-windows-nativo-uia.md) y el recorrido `CP-PI-01` sync con `has_text` están cerrados. Quedan por verificar el recorrido async, la compatibilidad Python 3.10, el rendimiento y la revisión final.
 
 Marca cada paso al cumplir su criterio de cierre y registra allí la evidencia. Si una comprobación se registra en otro plan, enlaza su tarea.
 
@@ -106,7 +106,7 @@ Ejecutar en serie las verificaciones de escritorio. La captura debe distinguir l
 
 - [x] Organizar la automatización sync con POM y compartir CP-PI-01 entre el paquete publicado y el wheel local. [Comandos de ejecución](../../../demo/README.md#ejecutar-pc-info-automation).
 - [x] Verificar el clic de CP-PI-02 en la bandeja de descargas de Edge con el filtro por prefijo. Las comprobaciones por interfaz y navegador se registran en el [plan de activación ClickOnce](2026-11-19-pc-info-activacion-clickonce.md#tarea-1--clic-de-apertura-desde-el-navegador).
-- [x] Verificar captura, edición, cierre, retorno a la web y contenido textual del PDF con Java iniciado directamente.
+- [x] Verificar captura, edición, cierre, retorno a la web y contenido textual del PDF en CP-PI-01 sync completo (Edge + ClickOnce + `SScreen` opcional mediante `window(has_text=...)`).
 - [ ] Verificar la API async con los resultados esperados de [CP-PI-01](../../../demo/pc-info-automation/test_plan.md#caso-cp-pi-01--confirmar-datos-y-generar-el-pdf). Las pruebas de la librería ya cubren el clic nativo, la cancelación y la respuesta del bucle.
 - [x] Verificar una página creada antes y otra después de importar la extensión. Ambas páginas reales de Playwright expusieron `page.desktop` tras la importación.
 

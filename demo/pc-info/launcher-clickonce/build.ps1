@@ -33,6 +33,10 @@ if ($publishUri.Scheme -ne 'http' -or $publishUri.Host -notin @('127.0.0.1', 'lo
     throw 'BaseUrl debe ser la dirección HTTP local de la demo, por ejemplo http://127.0.0.1:18765.'
 }
 
+$applicationFilesRoot = Join-Path $publishRoot 'Application Files'
+if (Test-Path -LiteralPath $applicationFilesRoot) {
+    Remove-Item -LiteralPath $applicationFilesRoot -Recurse -Force
+}
 foreach ($directory in @($classRoot, $payloadRoot, $toolRoot)) {
     [void][System.IO.Directory]::CreateDirectory($directory)
 }
@@ -74,7 +78,7 @@ if (Test-Path -LiteralPath $applicationManifest) { Remove-Item -LiteralPath $app
 if ($LASTEXITCODE -ne 0) { throw 'No se pudo generar el manifiesto de aplicación.' }
 $deploymentManifest = Join-Path $publishRoot 'InformationDemo.application'
 $providerUrl = $BaseUrl.TrimEnd('/') + '/clickonce/InformationDemo.application'
-& $mage -New Deployment -ToFile $deploymentManifest -Name 'Información del equipo' -Version $buildVersion -Processor amd64 -AppManifest $applicationManifest -AppCodeBase "$payloadRelative/InformationDemo.exe.manifest" -ProviderUrl $providerUrl -Install false -TrustURLParameters true -Publisher 'playwright-desktop'
+& $mage -New Deployment -ToFile $deploymentManifest -Name "Informaci$([char]0x00F3)n del equipo" -Version $buildVersion -Processor amd64 -AppManifest $applicationManifest -AppCodeBase "$payloadRelative/InformationDemo.exe.manifest" -ProviderUrl $providerUrl -Install false -TrustURLParameters true -Publisher 'playwright-desktop'
 if ($LASTEXITCODE -ne 0) { throw 'No se pudo generar la publicación ClickOnce.' }
 
 Write-Output "Publicación lista en $publishRoot"
