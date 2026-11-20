@@ -2,9 +2,9 @@
 
 [Volver al README](../README.md)
 
-La preparación, ejecución y pruebas de las demos están en [demo/README.md](../demo/README.md).
+Las instrucciones de arranque y automatización están en el [README de la demo](../demo/README.md).
 
-playwright-desktop integra Playwright Python con aplicaciones de escritorio invocadas desde una web. `lib/` contiene la base Python/Rust de `page.desktop`. Cada demo tiene su propia carpeta dentro de `demo/`. El caso actual está en `demo/pc-info/`, con los componentes `web/`, `desktop-java/` y `launcher-clickonce/`; su automatización está en `demo/pc-info-automation/`.
+playwright-desktop integra Playwright Python con aplicaciones de escritorio invocadas desde una web. `lib/` contiene la implementación Python y Rust de `page.desktop`. La demo `pc-info` reúne la web, el formulario Java y el lanzador ClickOnce en `demo/pc-info/`. Su automatización está en `demo/pc-info-automation/`.
 
 ## Responsabilidades
 
@@ -39,7 +39,7 @@ sequenceDiagram
 
 La publicación utiliza parámetros URL de ClickOnce. El lanzador .NET Framework lee `ApplicationDeployment.CurrentDeployment.ActivationUri` y transmite la referencia de operación a Java. El navegador y el controlador ClickOnce del sistema realizan la activación. [Documentación de Microsoft](https://learn.microsoft.com/en-us/visualstudio/deployment/how-to-retrieve-query-string-information-in-an-online-clickonce-application?view=visualstudio)
 
-## Contrato HTTP local
+## Contrato HTTP
 
 | Método y ruta | Función |
 | --- | --- |
@@ -61,7 +61,7 @@ El almacén admite hasta cien operaciones vigentes. Una petición mayor de 64 KB
 
 ## Publicación y ejecución
 
-El script de compilación utiliza `javac --release 11` y `jar` para producir el formulario. Compila el lanzador C# para .NET Framework 4.8 y arquitectura x64 con el compilador de Windows. Microsoft.DotNet.Mage 10.0.0 genera los manifiestos ClickOnce con parámetros URL habilitados y una versión por compilación, calculada a partir de la fecha UTC con resolución de dos segundos. [Herramientas y publicación ClickOnce](https://learn.microsoft.com/en-us/visualstudio/deployment/clickonce-security-and-deployment?view=visualstudio)
+El script de compilación utiliza `javac --release 11` y `jar` para producir el formulario. Compila el lanzador C# para .NET Framework 4.8 y arquitectura x64. Microsoft.DotNet.Mage genera los manifiestos ClickOnce con parámetros URL habilitados y calcula su versión a partir de la fecha UTC con resolución de dos segundos. [Herramientas y publicación ClickOnce](https://learn.microsoft.com/en-us/visualstudio/deployment/clickonce-security-and-deployment?view=visualstudio).
 
 El lanzador se compila con `/nowin32manifest` para conservar la identidad de los manifiestos ClickOnce generados por Mage. La publicación de la demo se genera sin firma.
 
@@ -69,68 +69,59 @@ Dentro de `demo/pc-info/`, `start.ps1` prepara las dependencias Python, llama a 
 
 La dirección predeterminada es `http://127.0.0.1:18765`. El parámetro `-Port` de `start.ps1` configura conjuntamente la web y la publicación ClickOnce.
 
-La automatización usa la demo en el puerto predeterminado. CP-PI-01 obtiene de la publicación el runtime de Java y comprueba el PDF. CP-PI-02 usa el wheel local y termina al accionar el control de apertura del navegador.
+`launcher-clickonce/build.ps1` genera las clases y el JAR en `desktop-java/build/` y copia el JAR a la publicación de `launcher-clickonce/publish/`. Mage se instala en `launcher-clickonce/.tools/`. Flask sirve esa publicación mediante `/clickonce/`.
 
-El Page Object de CP-PI-02 localiza la ventana con `page.desktop.window(pid=pid, title_prefix=...)`. En Edge acciona **Abrir archivo** en el aviso reciente. En Chrome acciona el enlace del manifiesto en el historial de descargas.
+El script instala Mage con `dotnet tool install --allow-roll-forward`. [Compatibilidad de herramientas de .NET](https://learn.microsoft.com/dotnet/core/whats-new/dotnet-9/sdk#net-tool-roll-forward).
+
+El lanzador obtiene la ruta de Java de su archivo de configuración. El formulario utiliza Swing y se comunica con el servidor HTTP de la demo en la interfaz de loopback.
+
+### Automatización de la demo
+
+La automatización usa el puerto predeterminado. `run.py` comprueba que la demo responde y ejecuta CP-PI-01. El caso espera la ventana Java después del clic web. Si Edge solicita la apertura, la terminal indica cuándo confirmarla. La librería localiza Java Access Bridge mediante `JAVA_HOME`.
+
+CP-PI-02 comprueba el clic de apertura de forma independiente con el soporte nativo de Windows. Su Page Object localiza la ventana del navegador con `page.desktop.window(pid=pid, title_prefix=...)`.
 
 ### Navegador de la automatización
 
-Se intenta usar el navegador predeterminado de Windows si es compatible con Chromium para Playwright. Si el predeterminado no es compatible, se intenta usar Edge o Chrome instalados, en ese orden. Chrome y Edge tienen soporte oficial en Playwright. Otros navegadores Chromium dependen de su versión, y el Firefox instalado por el usuario requiere una versión adaptada para que Playwright lo controle. [Navegadores de Playwright](https://playwright.dev/python/docs/browsers).
+El fixture inicia Edge con un perfil temporal y pasa `--disable-sync` para evitar la sincronización con la cuenta Microsoft de Windows. Edge elige el puerto de depuración con `--remote-debugging-port=0`. El argumento `--edge-skip-compat-layer-relaunch` evita que un relanzamiento por compatibilidad interrumpa el arranque. El fixture cierra Edge y elimina el perfil al terminar. [Argumentos de Playwright para Chromium](https://github.com/microsoft/playwright/blob/main/packages/playwright-core/src/server/chromium/chromiumSwitches.ts).
 
-Edge ofrece soporte nativo para ClickOnce. Para usar una extensión en otro navegador con CP-PI-01, abre un perfil de pruebas con `--user-data-dir` apuntando a la ruta que imprime la automatización. Instala allí la extensión y cierra ese perfil antes de ejecutar `run.py`. CP-PI-02 usa un perfil temporal para aislar las descargas de la prueba. [ClickOnce en Edge](https://learn.microsoft.com/en-us/deployedge/edge-learn-more-co-di) y [perfiles de pruebas de Playwright](https://playwright.dev/python/docs/api/class-browsertype#browser-type-launch-persistent-context).
-
-`launcher-clickonce/build.ps1` genera las clases y el JAR en `desktop-java/build/` y copia el JAR a la publicación de `launcher-clickonce/publish/`. Mage se instala en `launcher-clickonce/.tools/`. Flask sirve esa publicación mediante `/clickonce/`.
-
-La instalación de Mage utiliza `dotnet tool install --allow-roll-forward`, disponible desde el SDK de .NET 9, para permitir su ejecución en un runtime de .NET más reciente. [Compatibilidad de herramientas de .NET](https://learn.microsoft.com/dotnet/core/whats-new/dotnet-9/sdk#net-tool-roll-forward).
-
-El lanzador obtiene la ruta Java de su archivo de configuración, distribuido con la publicación. El JAR utiliza Swing y las API estándar de Java 11. Los endpoints aceptados por los componentes nativos se limitan al servidor HTTP local de la demo.
+Playwright se conecta mediante `connect_over_cdp(no_defaults=True)`. En `fixtures/browser.py`, `DOWNLOAD_BEHAVIOR = None` conserva el aviso nativo de ClickOnce. Para reproducir la bandeja de descargas, comenta esa asignación y descomenta `DOWNLOAD_BEHAVIOR = "default"`. El fixture envía `Browser.setDownloadBehavior` en esa variante. Al abrir la copia descargada se puede perder el parámetro `operation` que necesita el lanzador. [ClickOnce en Edge](https://learn.microsoft.com/en-us/deployedge/edge-learn-more-co-di) · [Parámetros de activación](https://learn.microsoft.com/en-us/visualstudio/deployment/how-to-retrieve-query-string-information-in-an-online-clickonce-application?view=visualstudio).
 
 ## Herramientas de desarrollo
 
 ### Desarrollo de la librería
 
-La instalación de usuario se documenta con `pip install playwright-desktop`. Para compilar se necesita Python global, Maturin, Rust MSVC y las herramientas C++ de Visual Studio. Desde la raíz:
+La compilación requiere Python, Maturin, Rust MSVC y las herramientas C++ de Visual Studio. El comando se ejecuta desde la raíz del repositorio.
 
 ```powershell
 .\lib\scripts\build_py.ps1
 ```
 
-El script elimina por completo `lib/rust/target/python/` y `lib/dist/python/` antes de ejecutar `maturin build`. Si la limpieza falla, la compilación se detiene. El wheel nuevo queda en `lib/dist/python/`. La limpieza afecta únicamente a Python. No instala dependencias ni ejecuta pruebas. Las pruebas Rust se ejecutan por separado:
+El script limpia `lib/rust/target/python/` y `lib/dist/python/` antes de ejecutar `maturin build`. Si la limpieza falla, la compilación se detiene. El wheel queda en `lib/dist/python/` e incluye `playwright_desktop` y sus metadatos. `lib/README.md` aporta la descripción del paquete.
+
+La compilación aplica el remapeo de rutas de Rust y Maturin elimina los símbolos de depuración. El SBOM automático de Rust está desactivado para evitar que el wheel incluya rutas de construcción. [Remapeo de rutas de Rust](https://doc.rust-lang.org/rustc/remap-source-paths.html).
+
+Las pruebas de Rust se ejecutan con Cargo.
 
 ```powershell
 cargo test --manifest-path lib/rust/Cargo.toml
 ```
 
-Las pruebas internas Python se ejecutan con:
+Las pruebas internas de Python se ejecutan con `unittest`.
 
 ```powershell
 py -m unittest discover -s lib/tests -v
 ```
 
-La versión [0.1.0 está publicada en PyPI](https://pypi.org/project/playwright-desktop/0.1.0/).
-
 ### Publicación en PyPI
 
-Instala Twine una vez con `pip install twine`. Configura `MATURIN_PYPI_TOKEN` en el `.env` de la raíz y ejecuta:
+El script de publicación requiere Twine y usa variables de entorno para autenticar la subida.
 
 ```powershell
 .\lib\scripts\publish_py.ps1
 ```
 
-El script reutiliza `build_py.ps1` para compilar con Maturin y sube el wheel de `lib/dist/python/` mediante `twine upload`. Conserva el token existente en `.env` y restaura las variables de autenticación al terminar. `-WhatIf` muestra la acción sin ejecutarla. Los comandos `maturin publish` y `maturin upload` están [obsoletos](https://github.com/PyO3/maturin/issues/2334); Maturin se utiliza para la compilación. Para publicar cambios posteriores a `0.1.0`, incrementa la versión del paquete.
-
-El wheel incluye el paquete `playwright_desktop` y sus metadatos. `lib/README.md` se incorpora como descripción de PyPI; los README del repositorio y de la demo no se empaquetan. Las dependencias PDF pertenecen a la demo, no al paquete publicado.
-
-El build aplica el remapeo de rutas de Rust y Maturin elimina los símbolos de depuración. El SBOM Rust automático está desactivado para evitar que el wheel incluya rutas de construcción. [Remapeo de rutas de Rust](https://doc.rust-lang.org/rustc/remap-source-paths.html).
-
-Las salidas se separan por SDK; actualmente solo está implementado Python:
-
-| SDK | Salida |
-| --- | --- |
-| Python | `lib/dist/python/` |
-| JavaScript / TypeScript (Node.js) | `lib/dist/node/` |
-| Java | `lib/dist/java/` |
-| .NET | `lib/dist/dotnet/` |
+El script llama a `build_py.ps1`, sube el wheel con `twine upload` y restaura las variables de autenticación al terminar. `-WhatIf` muestra la acción prevista.
 
 ### Herramientas del agente
 

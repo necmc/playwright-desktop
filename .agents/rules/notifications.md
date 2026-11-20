@@ -14,3 +14,4 @@ Para enviar la notificación cuando ocurra alguna de las situaciones anteriores,
 
 ```bash
 python tools/notify.py "Tu mensaje aquí"
+```

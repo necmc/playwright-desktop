@@ -1,107 +1,106 @@
-"""Selecciona el navegador de Windows y lo abre con un perfil de pruebas."""
+"""Abre el navegador con un perfil de pruebas desechable."""
 
-from contextlib import contextmanager, nullcontext
-import ctypes
-from ctypes import wintypes
+from contextlib import contextmanager, suppress
 import json
 from os import environ
 from pathlib import Path
-import sys
+from subprocess import DEVNULL, Popen, TimeoutExpired
 from tempfile import TemporaryDirectory
+from time import monotonic, sleep
+from unittest import SkipTest
 
-from playwright.sync_api import Playwright
-
-
-BROWSER_NAMES = {
-    "msedge.exe": "Microsoft Edge",
-    "chrome.exe": "Google Chrome",
-    "chromium.exe": "Chromium",
-    "brave.exe": "Brave",
-    "vivaldi.exe": "Vivaldi",
-    "opera.exe": "Opera",
-}
-FALLBACK_PATHS = (
-    "Microsoft/Edge/Application/msedge.exe",
-    "Google/Chrome/Application/chrome.exe",
-)
+from playwright.sync_api import Error, Playwright
 
 
-def default_browser_executable() -> Path | None:
-    if sys.platform != "win32":
-        return None
+BROWSER_NAME = "Microsoft Edge"
+BROWSER_EXECUTABLE = Path("Microsoft/Edge/Application/msedge.exe")
 
-    assocf_is_protocol = 0x1000
-    assocstr_executable = 2
-    query = ctypes.windll.shlwapi.AssocQueryStringW
-    query.argtypes = (
-        wintypes.DWORD, wintypes.DWORD, wintypes.LPCWSTR, wintypes.LPCWSTR,
-        wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD),
-    )
-    query.restype = ctypes.c_long
-    length = wintypes.DWORD(32768)
-    path = ctypes.create_unicode_buffer(length.value)
-    if query(assocf_is_protocol, assocstr_executable, "http", None, path, ctypes.byref(length)) == 0:
-        return Path(path.value)
-    return None
+# Comenta el bloque activo antes de descomentar el otro.
 
+# Navegador que muestra el aviso nativo de ClickOnce
+DOWNLOAD_BEHAVIOR = None
 
-def select_browser() -> Path:
-    preferred = default_browser_executable()
-    if preferred and preferred.name.lower() in BROWSER_NAMES and preferred.is_file():
-        return preferred
-
-    for relative_path in FALLBACK_PATHS:
-        for folder in ("ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"):
-            if root := environ.get(folder):
-                candidate = Path(root) / relative_path
-                if candidate.is_file():
-                    name = BROWSER_NAMES[candidate.name.lower()]
-                    print(f"No se pudo usar el navegador predeterminado para la prueba. Se abrirá {name}.", flush=True)
-                    return candidate
-    raise RuntimeError("Para ejecutar la prueba, usa un navegador Chromium compatible con Playwright, como Edge o Chrome.")
+# Navegador que descarga el manifiesto y puede perder el parámetro operation
+# DOWNLOAD_BEHAVIOR = "default"
 
 
 @contextmanager
-def open_clickonce_context(playwright: Playwright, executable: Path, *, use_extension_profile: bool):
-    profile = None
-    if use_extension_profile and executable.name.lower() != "msedge.exe":
-        name = BROWSER_NAMES[executable.name.lower()]
-        extension_profile = Path(environ["LOCALAPPDATA"]) / "playwright-desktop" / "pc-info" / executable.stem.lower()
-        print(f"Para abrir ClickOnce en {name}, usa una extensión compatible en el perfil de prueba o usa Edge.", flush=True)
-        print(f"Perfil de prueba para extensiones: {extension_profile}", flush=True)
-        if extension_profile.is_dir():
-            profile = extension_profile
-
-    profile_context = nullcontext(profile) if profile else TemporaryDirectory(prefix="pc-info-browser-")
-    with profile_context as user_data_dir:
-        if profile is None:
-            directory = Path(user_data_dir)
-            preferences = directory / "Default" / "Preferences"
-            preferences.parent.mkdir()
-            preferences.write_text(json.dumps({
-                "download": {"default_directory": str(directory / "downloads")},
-            }), encoding="utf-8")
-        context = playwright.chromium.launch_persistent_context(
-            user_data_dir,
-            executable_path=executable,
-            headless=False,
-            accept_downloads=False,
-            ignore_default_args=[
-                "--disable-extensions",
-                "--disable-component-extensions-with-background-pages",
-                "--disable-default-apps",
-                "--enable-automation",
+def open_browser_context(playwright: Playwright):
+    executable = _browser_executable()
+    with TemporaryDirectory(prefix="pc-info-browser-") as profile:
+        directory = Path(profile)
+        preferences = directory / "Default" / "Preferences"
+        preferences.parent.mkdir()
+        preferences.write_text(json.dumps({
+            "download": {"default_directory": str(directory / "downloads")},
+        }), encoding="utf-8")
+        process = Popen(
+            [
+                # Inicia el ejecutable de Edge.
+                str(executable),
+                # Usa el perfil temporal de la prueba.
+                f"--user-data-dir={profile}",
+                # Deja que Edge elija un puerto libre para Playwright.
+                "--remote-debugging-port=0",
+                # Omite la pantalla de bienvenida.
+                "--no-first-run",
+                # Omite la comprobación del navegador predeterminado.
+                "--no-default-browser-check",
+                # Evita que Edge se relance antes de aceptar conexiones por Chrome DevTools Protocol.
+                "--edge-skip-compat-layer-relaunch",
+                # Evita sincronizar el perfil temporal con la cuenta Microsoft de Windows.
+                "--disable-sync",
+                # Abre una pestaña en blanco.
+                "about:blank",
             ],
+            # Descarta la salida estándar de Edge.
+            stdout=DEVNULL,
+            # Descarta la salida de error de Edge.
+            stderr=DEVNULL,
         )
         try:
-            # Conservar el manejo del navegador para las descargas que activan ClickOnce.
-            protocol = context.browser.new_browser_cdp_session()
-            context_ids = protocol.send("Target.getBrowserContexts")["browserContextIds"]
-            options = {"behavior": "default"}
-            if context_ids:
-                options["browserContextId"] = context_ids[0]
-            protocol.send("Browser.setDownloadBehavior", options)
-            protocol.detach()
-            yield context
+            browser = playwright.chromium.connect_over_cdp(
+                _debugging_endpoint(process, directory), no_defaults=True, timeout=10_000,
+            )
+            try:
+                if DOWNLOAD_BEHAVIOR is not None:
+                    session = browser.new_browser_cdp_session()
+                    try:
+                        session.send("Browser.setDownloadBehavior", {"behavior": DOWNLOAD_BEHAVIOR})
+                    finally:
+                        session.detach()
+                yield browser.contexts[0]
+            finally:
+                with suppress(Error):
+                    browser.new_browser_cdp_session().send("Browser.close")
         finally:
-            context.close()
+            try:
+                process.wait(timeout=5)
+            except TimeoutExpired:
+                process.terminate()
+                process.wait(timeout=5)
+
+
+def _browser_executable() -> Path:
+    for variable in ("PROGRAMFILES(X86)", "PROGRAMFILES", "LOCALAPPDATA"):
+        if root := environ.get(variable):
+            executable = Path(root) / BROWSER_EXECUTABLE
+            if executable.is_file():
+                return executable
+    raise SkipTest(f"Instala {BROWSER_NAME} para ejecutar esta prueba.")
+
+
+def _debugging_endpoint(process: Popen, profile: Path) -> str:
+    port_file = profile / "DevToolsActivePort"
+    deadline = monotonic() + 10
+    while monotonic() < deadline:
+        with suppress(FileNotFoundError):
+            port, separator, _ = port_file.read_text(encoding="utf-8").partition("\n")
+            if separator and port.isdecimal():
+                return f"http://127.0.0.1:{port}"
+        if (exit_code := process.poll()) is not None:
+            raise RuntimeError(
+                f"{BROWSER_NAME} se cerró antes de iniciar la prueba (código de salida {exit_code})."
+            )
+        sleep(0.1)
+    raise TimeoutError(f"{BROWSER_NAME} no inició la conexión con Playwright.")

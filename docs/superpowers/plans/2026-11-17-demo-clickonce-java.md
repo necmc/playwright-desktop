@@ -62,5 +62,5 @@ La [tarea de activación completa](2026-11-19-pc-info-activacion-clickonce.md#ta
 - [x] Proporcionar `demo/pc-info/start.ps1` para preparar dependencias, compilar los componentes y arrancar Flask con un solo comando. Se verificaron el arranque desde otra carpeta, el puerto configurable, HTTP 200, creación de operaciones, coherencia de la publicación, rechazo de puerto ocupado y parada con Ctrl+C. El arranque predeterminado quedó verificado en `18765`.
 - [x] Documentar el arranque y la ejecución de la automatización en `demo/README.md`.
 - [x] Documentar el intercambio entre los componentes en la [documentación técnica](../../documentacion-tecnica.md).
-- [x] Verificar CP-PI-02 en Edge y Chrome. [Resultados del clic de apertura](2026-11-19-pc-info-activacion-clickonce.md#tarea-1--clic-de-apertura-desde-el-navegador).
+- [x] Verificar el clic de CP-PI-02 en la bandeja de descargas de Edge. Las comprobaciones por interfaz y navegador se registran en el [plan de activación ClickOnce](2026-11-19-pc-info-activacion-clickonce.md#tarea-1--clic-de-apertura-desde-el-navegador).
 - [ ] Ejecutar una revisión final independiente de la demo y corregir los hallazgos antes de entregar. Usar la evidencia de CP-PI-01.

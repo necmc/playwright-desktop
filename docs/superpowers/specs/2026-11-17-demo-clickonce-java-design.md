@@ -56,7 +56,7 @@ El formulario y la obtención de los datos del equipo pertenecen a Java. La gene
 1. El usuario pulsa **Obtener información**.
 2. Flask crea una operación con identificador aleatorio, estado `pending` y vigencia de veinte minutos.
 3. JavaScript solicita la activación de la publicación ClickOnce con una referencia a esa operación en la URL.
-4. ClickOnce ejecuta el lanzador C#, que inicia Java con los argumentos de la operación.
+4. Si el navegador solicita confirmación, el usuario autoriza la apertura. ClickOnce ejecuta el lanzador C#, que inicia Java con los argumentos de la operación.
 5. Java carga la fecha y el nombre del equipo localmente, precarga el alias y muestra el formulario editable.
 6. **Confirmar** valida los valores y envía los tres campos al endpoint de resultado de Flask mediante un formulario HTTP UTF-8.
 7. Flask valida los valores y genera el PDF. La operación pasa a `completed` cuando los datos y el PDF están disponibles.
@@ -76,7 +76,7 @@ La configuración inicial es local, con Flask en `127.0.0.1:18765` y puerto conf
 - OpenJDK 11 o superior como runtime configurable mediante `-JavaHome`.
 - C# como lanzador de Windows x64 para .NET Framework 4.8, compilado con `/nowin32manifest` para evitar un conflicto de identidades en ClickOnce.
 - Microsoft.DotNet.Mage 10.0.0 para generar los manifiestos, instalado localmente mediante el SDK de .NET 9 o superior.
-- Un navegador compatible con Playwright para ejecutar la automatización. El flujo completo requiere que ese navegador pueda activar ClickOnce.
+- Microsoft Edge para ejecutar la automatización. La demo puede usarse manualmente con otros navegadores que puedan activar ClickOnce.
 
 `demo/pc-info/start.ps1` prepara las dependencias, compila los componentes, publica ClickOnce y arranca Flask en primer plano. Su parámetro `-Port` configura la misma dirección para la web y la publicación. Las instrucciones de uso están en el [README de demos](../../../demo/README.md).
 

@@ -100,12 +100,12 @@ Para repetir las pruebas Swing en una sesión interactiva de Windows, indica el 
 
 **Archivos:** `demo/pc-info-automation/run.py` y `tests/test_flow.py`, con Page Objects en `pages/` y preparación en `fixtures/`. Instrucciones en `demo/README.md`, único README de las demos. Los casos técnicos del motor se verifican como parte de la librería.
 
-**Consume:** demo compilada, navegador compatible con ClickOnce y wheel instalado. **Produce:** evidencia de la integración de `page.desktop` con la clase oficial `Page`.
+La validación usa la demo compilada, Microsoft Edge con ClickOnce habilitado y el wheel local. Registra la integración de `page.desktop` con la clase oficial `Page`.
 
 Ejecutar en serie las verificaciones de escritorio. La captura debe distinguir las ventanas de la operación mediante los filtros y criterios de la [tarea 4 de la librería](#tarea-4--selección-y-operaciones-básicas). El cierre requiere completar CP-PI-01 en sync, cuya evidencia se registra en el [plan de activación ClickOnce](2026-11-19-pc-info-activacion-clickonce.md#tarea-2--activación-completa).
 
-- [x] Organizar la automatización sync con POM y documentar los [comandos de CP-PI-01 y CP-PI-02](../../../demo/README.md#ejecutar-pc-info-automation).
-- [x] Verificar CP-PI-02 en Edge y Chrome con el filtro de título por prefijo. [Resultados del clic de apertura](2026-11-19-pc-info-activacion-clickonce.md#tarea-1--clic-de-apertura-desde-el-navegador).
+- [x] Organizar la automatización sync con POM y compartir CP-PI-01 entre el paquete publicado y el wheel local. [Comandos de ejecución](../../../demo/README.md#ejecutar-pc-info-automation).
+- [x] Verificar el clic de CP-PI-02 en la bandeja de descargas de Edge con el filtro por prefijo. Las comprobaciones por interfaz y navegador se registran en el [plan de activación ClickOnce](2026-11-19-pc-info-activacion-clickonce.md#tarea-1--clic-de-apertura-desde-el-navegador).
 - [x] Verificar captura, edición, cierre, retorno a la web y contenido textual del PDF con Java iniciado directamente.
 - [ ] Verificar la API async con los resultados esperados de [CP-PI-01](../../../demo/pc-info-automation/test_plan.md#caso-cp-pi-01--confirmar-datos-y-generar-el-pdf). Las pruebas de la librería ya cubren el clic nativo, la cancelación y la respuesta del bucle.
 - [x] Verificar una página creada antes y otra después de importar la extensión. Ambas páginas reales de Playwright expusieron `page.desktop` tras la importación.

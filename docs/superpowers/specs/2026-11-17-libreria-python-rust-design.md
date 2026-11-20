@@ -69,11 +69,11 @@ lib/
 demo/README.md                  Objetivo, contenido y ejecución de las demos
 demo/pc-info-automation/
   models/                       DTO de fecha, equipo y alias
-  config.py                     Dirección, plazo y runtime de la demo
-  run.py                        Ejecución de los casos funcionales
-  run_local.ps1                 Ejecuta CP-PI-02 con el wheel local
+  config.py                     Dirección y plazo de activación de la demo
+  run.py                        Ejecución del recorrido CP-PI-01
+  run_local.ps1                 Compilación y ejecución con el wheel local
   pages/                        Page Objects de web, Java y navegador
-  fixtures/                     Selección, preparación y limpieza del navegador
+  fixtures/                     Apertura y limpieza de Edge para las pruebas
   utils/                        Lectura del texto del PDF
   tests/                        Escenario funcional y aserciones web/PDF
 ```
@@ -97,7 +97,7 @@ El contrato Rust separa el coordinador del adaptador de Windows. Cada adaptador 
 
 Cada build limpia únicamente sus artefactos. Python utiliza `dist/python/` y `rust/target/python/`; sus scripts no eliminan las carpetas de otros SDK.
 
-La demo usa Page Object Model (POM). CP-PI-01 captura Java mediante `page.desktop.expect_window()` y comprueba los datos y el PDF. CP-PI-02 usa el wheel local para localizar la ventana del navegador por PID y prefijo de título y accionar el control de apertura. Las comprobaciones del motor y de concurrencia pertenecen a la librería.
+La demo usa Page Object Model (POM). CP-PI-01 espera Java mediante `page.desktop.expect_window()` después del clic web y, si Edge muestra el aviso, requiere confirmación del usuario. El mismo caso se ejecuta con la librería publicada o con el wheel local. CP-PI-02 verifica por separado el clic de apertura mediante PID y prefijo de título. Las comprobaciones del motor y de concurrencia pertenecen a la librería.
 
 Cada demo conserva su aplicación en `demo/<nombre>/` y todos los flujos que utilizan la librería en `demo/<nombre>-automation/`. Las pruebas internas de la librería pertenecen a `lib/tests/`.
 

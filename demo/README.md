@@ -10,11 +10,11 @@ Requiere Windows x64, Python 3.10–3.14, JDK 11+, .NET Framework 4.8, SDK de .N
 .\demo\pc-info\start.ps1
 ```
 
-En [http://127.0.0.1:18765](http://127.0.0.1:18765), pulsa **Obtener información**. Usa **Abrir aplicación** si aparece. Confirma los datos en Java para ver el PDF.
+Abre la demo y pulsa **Obtener información**. Confirma el aviso del navegador o usa el enlace **Abrir aplicación** si el aviso no aparece. Confirma los datos en Java para ver el PDF. [Abrir pc-info](http://127.0.0.1:18765).
 
 ## Ejecutar pc-info-automation
 
-Deja `pc-info` en ejecución y abre otra terminal.
+Instala Microsoft Edge, deja `pc-info` en ejecución y abre otra terminal. Define `JAVA_HOME` con el JDK de la demo. Ambas opciones ejecutan el mismo recorrido. Si Edge pide confirmación, pulsa **Abrir** cuando la prueba lo indique.
 
 ### Versión publicada
 
@@ -25,7 +25,7 @@ py demo/pc-info-automation/run.py
 
 ### Versión local
 
-Prueba el clic de apertura con el navegador Chromium predeterminado compatible con Playwright. Validado en Edge y Chrome. Requiere Maturin, Rust MSVC y las herramientas C++ de Visual Studio.
+Usa esta opción para validar cambios en desarrollo. Requiere Maturin, Rust MSVC y las herramientas C++ de Visual Studio.
 
 ```powershell
 .\demo\pc-info-automation\run_local.ps1

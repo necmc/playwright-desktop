@@ -8,7 +8,7 @@ Extiende el `Page` oficial de Playwright Python con `page.desktop` para interact
 pip install playwright-desktop
 ```
 
-Requiere Python 3.10–3.14 y Windows x64.
+Requiere Windows x64 y Python 3.10 como mínimo.
 
 ## Uso básico
 
@@ -24,7 +24,7 @@ page.desktop.get_by_role("textbox", name="Nombre").fill("Ana")
 page.desktop.get_by_role("button", name="Aceptar").click()
 ```
 
-Con la API asíncrona de Playwright, utiliza `await` en acciones como `fill()` y `click()`. Los imports y las acciones web habituales se conservan.
+Con Playwright asíncrono, usa `async with` para capturar la ventana y `await` para las acciones.
 
 ## Estructura
 

@@ -80,7 +80,7 @@ notice.get_by_role("button", name="Aplicar").click()
 
 - [x] Incorporar `title_prefix` en `window()` para sync y async y combinarlo con el PID.
 - [x] Verificar en Rust que el prefijo conserva la selección única, el filtro por PID y la búsqueda de título exacto.
-- [x] Verificar el uso desde Edge y Chrome. [Resultados del clic de apertura](2026-11-19-pc-info-activacion-clickonce.md#tarea-1--clic-de-apertura-desde-el-navegador).
+- [x] Verificar el filtro en la bandeja de descargas de Edge y el historial de Chrome. [Resultados del clic de apertura](2026-11-19-pc-info-activacion-clickonce.md#tarea-1--clic-de-apertura-desde-el-navegador).
 
 ## Pruebas unitarias
 

@@ -1,6 +1,7 @@
 import playwright_desktop
+from playwright_desktop import DesktopTimeoutError
 
-from config import ACTIVATION_TIMEOUT_MS, published_java_home
+from config import ACTIVATION_TIMEOUT_MS
 from fixtures.demo import DemoTestCase
 from models.equipment_information import EquipmentInformation
 from pages.information_form import InformationForm
@@ -12,19 +13,23 @@ class PcInfoFlowTests(DemoTestCase):
         """CP-PI-01 · Confirmar datos y generar el PDF."""
         self.web.open()
         page = self.page
-        # La publicación de la demo indica dónde localizar Java Access Bridge.
-        if java_home := published_java_home():
-            page.desktop.configure(java_home=java_home)
         page.desktop.set_default_timeout(15_000)
 
         expected = EquipmentInformation(
             date="2026-11-19", computer_name="EQUIPO-CLICKONCE", alias="Integración Ñ"
         )
 
-        with page.desktop.expect_window(
-            title=InformationForm.TITLE, timeout=ACTIVATION_TIMEOUT_MS
-        ) as opened:
-            self.web.request_information()
+        try:
+            with page.desktop.expect_window(
+                title=InformationForm.TITLE, timeout=ACTIVATION_TIMEOUT_MS
+            ) as opened:
+                self.web.request_information()
+                print("Si Edge solicita abrir el archivo, pulsa «Abrir» y revisa los avisos de ClickOnce.", flush=True)
+        except DesktopTimeoutError:
+            raise AssertionError(
+                f"No se abrió la ventana «{InformationForm.TITLE}». "
+                "Revisa los avisos pendientes de Edge o ClickOnce."
+            ) from None
 
         form = InformationForm(opened.value)
         form.fill(expected)
