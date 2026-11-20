@@ -3,7 +3,7 @@ use platform::{CapturePreparation, ControlQuery, Platform, ProviderSelection};
 pub(crate) use platform::{ControlAction, ControlResult};
 use pyo3::prelude::*;
 use std::{collections::{HashMap, HashSet, VecDeque}, path::Path,
-    sync::{Arc, Condvar, Mutex, OnceLock, atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering}, mpsc::{self, Sender, Receiver}},
+    sync::{Arc, Condvar, Mutex, OnceLock, atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering}, mpsc::{self, Sender, Receiver}},
     time::{Duration, Instant}};
 
 struct SessionState { id: u64, closed: AtomicBool, options: SessionOptions }
@@ -37,29 +37,60 @@ impl SessionOptions {
 
 const TIMEOUT_MESSAGE: &str =
     "No unique desktop window or control became ready before the deadline. Check its title, PID and accessibility provider.";
+const MUTATION_TIMEOUT_MESSAGE: &str =
+    "The desktop action timed out after entering the native operation; its effect may be unknown.";
+const REQUEST_CANCELLED: u8 = 1;
+const MUTATION_STARTED: u8 = 2;
+const REQUEST_EXPIRED: u8 = 4;
 
-struct RequestState {
+pub(crate) struct RequestState {
     session: Arc<SessionState>,
     deadline: Instant,
     immediate: bool,
-    cancelled: AtomicBool,
-    action_pending: AtomicBool,
+    status: AtomicU8,
 }
 
 impl RequestState {
-    fn check(&self) -> Result<()> {
-        if self.cancelled.load(Ordering::Acquire) || self.session.closed.load(Ordering::Acquire) {
-            return Err(Failure::new("CANCELLED", "The desktop request or its session was cancelled."));
+    fn new(session: Arc<SessionState>, deadline: Instant, immediate: bool) -> Self {
+        Self { session, deadline, immediate, status: AtomicU8::new(0) }
+    }
+
+    pub(crate) fn check(&self) -> Result<()> {
+        let status = self.status.load(Ordering::Acquire);
+        if status & REQUEST_CANCELLED != 0 || self.session.closed.load(Ordering::Acquire) {
+            return Err(Self::cancelled_error());
         }
-        if Instant::now() >= self.deadline {
-            let message = if self.action_pending.load(Ordering::Acquire) {
-                "The desktop action timed out after dispatch; its effect may be unknown."
+        if status & REQUEST_EXPIRED != 0 || Instant::now() >= self.deadline {
+            let message = if self.expire() {
+                MUTATION_TIMEOUT_MESSAGE
             } else {
                 "The desktop request exceeded its deadline."
             };
             return Err(Failure::new("TIMEOUT", message));
         }
         Ok(())
+    }
+
+    pub(crate) fn begin_mutation(&self) -> Result<()> {
+        self.check()?;
+        // The deadline, cancellation and mutation admission share one state.
+        // A timeout can report whether the native call was already admitted.
+        match self.status.compare_exchange(0, MUTATION_STARTED, Ordering::AcqRel, Ordering::Acquire) {
+            Ok(_) | Err(MUTATION_STARTED) => Ok(()),
+            Err(_) => self.check(),
+        }
+    }
+
+    fn cancel(&self) {
+        self.status.fetch_or(REQUEST_CANCELLED, Ordering::AcqRel);
+    }
+
+    fn expire(&self) -> bool {
+        self.status.fetch_or(REQUEST_EXPIRED, Ordering::AcqRel) & MUTATION_STARTED != 0
+    }
+
+    fn cancelled_error() -> Failure {
+        Failure::new("CANCELLED", "The desktop request or its session was cancelled.")
     }
 }
 
@@ -164,7 +195,7 @@ pub struct Request { state: Arc<RequestState> }
 
 #[pymethods]
 impl Request {
-    fn cancel(&self) { self.state.cancelled.store(true, Ordering::Release); }
+    fn cancel(&self) { self.state.cancel(); }
 }
 
 #[pyclass]
@@ -203,11 +234,8 @@ impl Engine {
         let session = self.shared.sessions.lock().unwrap().get(&session_id).cloned()
             .ok_or_else(|| as_python(Failure::new("CLOSED", "The desktop session is closed.")))?;
         let timeout = if timeout_ms == 0 { 10_000 } else { timeout_ms };
-        Ok(Request { state: Arc::new(RequestState {
-            session,
-            deadline: Instant::now() + Duration::from_millis(timeout),
-            immediate: timeout_ms == 0, cancelled: AtomicBool::new(false), action_pending: AtomicBool::new(false),
-        }) })
+        let deadline = Instant::now() + Duration::from_millis(timeout);
+        Ok(Request { state: Arc::new(RequestState::new(session, deadline, timeout_ms == 0)) })
     }
 
     #[pyo3(signature = (request, operation, *, window_id=0, capture_id=0, title="", pid=None, role="", name="", text="", scope_role="", scope_name=""))]
@@ -271,11 +299,11 @@ impl Shared {
         match receiver.recv_timeout(state.deadline.saturating_duration_since(Instant::now())) {
             Ok(result) => result,
             Err(mpsc::RecvTimeoutError::Timeout) => {
-                state.cancelled.store(true, Ordering::Release);
+                let mutation_started = state.expire();
                 if self.mark_stalled_call() {
                     Err(Failure::new("TIMEOUT", "A native bridge call exceeded its deadline; its effect may be unknown. Restart Python before using desktop actions again."))
-                } else if state.action_pending.load(Ordering::Acquire) {
-                    Err(Failure::new("TIMEOUT", "The desktop action timed out after dispatch; its effect may be unknown."))
+                } else if mutation_started {
+                    Err(Failure::new("TIMEOUT", MUTATION_TIMEOUT_MESSAGE))
                 } else {
                     Err(Failure::new("TIMEOUT", TIMEOUT_MESSAGE))
                 }
@@ -527,7 +555,6 @@ impl<P: Platform> Worker<P> {
                     command.pending = Some(PendingCall::Action { id, result });
                     return Ok(None);
                 };
-                command.request.action_pending.store(false, Ordering::Release);
                 match response {
                     Ok(Some(result)) => Ok(Some(Reply { handle: id, text: result.text })),
                     Ok(None) => Ok(None),
@@ -615,13 +642,9 @@ impl<P: Platform> Worker<P> {
             Operation::Window(WindowOperation::Click) => ControlAction::Click,
             _ => unreachable!("only control actions are dispatched to the accessibility provider"),
         };
-        let is_click = matches!(action, ControlAction::Click);
         let result = self.platform.act(
             provider, request.clone(), id, item.window.clone(), action, command.arguments.control.clone(),
         )?;
-        if is_click {
-            request.action_pending.store(true, Ordering::Release);
-        }
         command.pending = Some(PendingCall::Action { id, result });
         Ok(None)
     }

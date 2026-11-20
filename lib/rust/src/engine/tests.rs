@@ -41,7 +41,7 @@ impl Platform for FakePlatform {
         &mut self, provider: Self::Provider, request: Arc<RequestState>, _: u64, window: Self::Window,
         action: ControlAction, query: ControlQuery,
     ) -> Result<Receiver<Result<Option<ControlResult>>>> {
-        request.check()?;
+        request.begin_mutation()?;
         assert_eq!(provider, "fake");
         assert_eq!(window.0, 2);
         assert_eq!(query.name, "Aceptar");
@@ -70,10 +70,7 @@ fn session(id: u64) -> Arc<SessionState> {
 }
 
 fn request(session: Arc<SessionState>, deadline: Instant) -> Arc<RequestState> {
-    Arc::new(RequestState {
-        session, deadline, immediate: false, cancelled: AtomicBool::new(false),
-        action_pending: AtomicBool::new(false),
-    })
+    Arc::new(RequestState::new(session, deadline, false))
 }
 
 fn test_worker() -> Worker<FakePlatform> {
@@ -127,18 +124,36 @@ fn a_platform_adapter_can_capture_operate_and_release_a_window() {
 #[test]
 fn request_cancellation_and_closure_are_checked() {
     let session = session(1);
-    let request = request(session.clone(), Instant::now() + Duration::from_secs(1));
-    assert!(request.check().is_ok());
-    request.cancelled.store(true, Ordering::Release);
-    assert_eq!(request.check().unwrap_err().code, "CANCELLED");
-    request.cancelled.store(false, Ordering::Release);
+    let deadline = Instant::now() + Duration::from_secs(1);
+    let cancelled = request(session.clone(), deadline);
+    assert!(cancelled.check().is_ok());
+    cancelled.cancel();
+    assert_eq!(cancelled.check().unwrap_err().code, "CANCELLED");
+    let closing = request(session.clone(), deadline);
     session.closed.store(true, Ordering::Release);
-    assert_eq!(request.check().unwrap_err().code, "CANCELLED");
+    assert_eq!(closing.check().unwrap_err().code, "CANCELLED");
 }
 #[test]
 fn deadlines_are_monotonic() {
     let request = request(session(2), Instant::now() - Duration::from_millis(1));
     assert_eq!(request.check().unwrap_err().code, "TIMEOUT");
+}
+
+#[test]
+fn timeouts_distinguish_started_mutations_from_requests_that_cannot_start() {
+    let worker = test_worker();
+    let owner = session(1);
+    for mutation_started in [false, true] {
+        let state = request(owner.clone(), Instant::now() + Duration::from_millis(100));
+        if mutation_started {
+            state.begin_mutation().unwrap();
+        }
+        let (_sender, receiver) = mpsc::channel();
+        let error = worker.shared.wait_for_reply(&state, receiver).err().expect("request should time out");
+        assert_eq!(error.code, "TIMEOUT");
+        assert_eq!(error.message.contains("effect may be unknown"), mutation_started);
+        assert_eq!(state.begin_mutation().unwrap_err().code, "TIMEOUT");
+    }
 }
 
 #[test]
@@ -155,7 +170,7 @@ fn a_short_queued_deadline_does_not_poison_an_active_call_with_time_left() {
     shared.run_native(active.deadline, || {
         let error = shared.wait_for_reply(&queued, queued_reply).err().expect("queued request expired");
         assert_eq!(error.code, "TIMEOUT");
-        assert!(queued.cancelled.load(Ordering::Acquire));
+        assert_eq!(queued.check().unwrap_err().code, "TIMEOUT");
         assert!(active.check().is_ok());
         assert!(!shared.poisoned.load(Ordering::Acquire));
     }).unwrap();
@@ -191,7 +206,7 @@ fn pending_commands_with_expired_cancelled_or_closed_requests_are_discarded() {
         replies.push(reply);
     }
     worker.shared.queued.store(pending.len(), Ordering::Release);
-    cancelled.cancelled.store(true, Ordering::Release);
+    cancelled.cancel();
     Engine { shared: worker.shared.clone() }.close_session(closed.id);
     worker.process_pending(&mut pending);
 
@@ -221,7 +236,7 @@ fn cancelling_a_queued_preparation_after_reservation_releases_it_before_the_next
     assert!(worker.captures.contains_key(&previous_capture));
 
     // Cancellation arrives after the preparation ran, before another command in the queue.
-    abandoned.cancelled.store(true, Ordering::Release);
+    abandoned.cancel();
     let (prepare, second_reply) = command(next, Operation::PrepareCapture, Arguments {
         title: "Second queued capture".into(), ..Arguments::default()
     });

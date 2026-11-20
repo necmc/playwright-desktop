@@ -1,7 +1,7 @@
 pub mod ffi;
 pub mod loader;
 
-use crate::{error::{Failure, Result}, windows};
+use crate::{engine::RequestState, error::{Failure, Result}, windows};
 use ffi::*;
 use loader::Library;
 use std::rc::Rc;
@@ -124,7 +124,7 @@ impl Object {
         decode_utf16(text)
     }
 
-    pub fn fill(&self, text: &str, check: &dyn Fn() -> Result<()>) -> Result<()> {
+    pub fn fill(&self, text: &str, request: &RequestState) -> Result<()> {
         let mut value: Vec<u16> = text.encode_utf16().take(MAX_TEXT).collect();
         if value.len() == MAX_TEXT || value.contains(&0) {
             return Err(Failure::new("INVALID_ARGUMENT", format!(
@@ -132,17 +132,17 @@ impl Object {
             )));
         }
         value.push(0);
-        check()?;
+        request.begin_mutation()?;
         // SAFETY: value is NUL-terminated with checked size, context is live and editable.
         if unsafe { (self.0.library.set_text)(self.0.vm, self.0.object, value.as_ptr()) } == 0 {
             return Err(Failure::new("ACTION", "Java Access Bridge rejected the text replacement."));
         }
-        check()?;
+        request.check()?;
         if self.text()? != text { return Err(Failure::new("ACTION", "The Java text value does not match after replacement.")); }
         Ok(())
     }
 
-    pub fn click(&self, check: &dyn Fn() -> Result<()>) -> Result<()> {
+    pub fn click(&self, request: &RequestState) -> Result<()> {
         let mut actions = Actions::zeroed();
         // SAFETY: actions has the checked header layout and this context is still live.
         if unsafe { (self.0.library.actions)(self.0.vm, self.0.object, &mut *actions) } == 0 || !(1..=256).contains(&actions.count) {
@@ -158,7 +158,7 @@ impl Object {
         todo.count = 1;
         todo.actions[0] = actions.actions[index];
         let mut failed = -1;
-        check()?;
+        request.begin_mutation()?;
         // SAFETY: exactly one action obtained from this live control is requested once.
         if unsafe { (self.0.library.do_actions)(self.0.vm, self.0.object, &mut *todo, &mut failed) } == 0 {
             return Err(Failure::new("ACTION", format!("Java rejected the button action (index {failed}); it was not retried.")));

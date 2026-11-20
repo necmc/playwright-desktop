@@ -236,7 +236,7 @@ impl Platform for WindowsPlatform {
                     state.targets.entry(id).or_insert(target)
                 };
                 ensure_ready(target.state())?;
-                target.perform(action, &query.role, &query.name, &check)
+                target.perform(action, &query.role, &query.name, request)
             }),
             WindowsProvider::UiAutomation => self.uia()?.submit(request, move |state, request| {
                 let check = || request.check();
@@ -255,7 +255,7 @@ impl Platform for WindowsPlatform {
                 client.perform(
                     target, action, uia::Selector { role: &query.role, name: &query.name },
                     (!query.scope_role.is_empty()).then_some(uia::Selector { role: &query.scope_role, name: &query.scope_name }),
-                    &check,
+                    request,
                 )
             }),
         }
@@ -304,13 +304,10 @@ mod tests {
     use std::sync::atomic::AtomicBool;
 
     fn request(timeout: Duration) -> Arc<RequestState> {
-        Arc::new(RequestState {
-            session: Arc::new(SessionState {
-                id: 1, closed: AtomicBool::new(false), options: SessionOptions::automatic(None, false).unwrap(),
-            }),
-            deadline: Instant::now() + timeout, immediate: false, cancelled: AtomicBool::new(false),
-            action_pending: AtomicBool::new(false),
-        })
+        let session = Arc::new(SessionState {
+            id: 1, closed: AtomicBool::new(false), options: SessionOptions::automatic(None, false).unwrap(),
+        });
+        Arc::new(RequestState::new(session, Instant::now() + timeout, false))
     }
 
     #[test]

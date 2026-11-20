@@ -1,7 +1,7 @@
 //! Windows desktop access for the Java Access Bridge backend.
 
 use crate::{
-    engine::{ControlAction, ControlResult, SessionOptions},
+    engine::{ControlAction, ControlResult, RequestState, SessionOptions},
     error::{Failure, Result},
     jab::{Object, loader::{Library, dll_path}},
     windows::{self, WindowState},
@@ -105,21 +105,21 @@ impl Target {
     }
 
     pub(crate) fn perform(
-        &self, action: ControlAction, role: &str, name: &str, check: &dyn Fn() -> Result<()>,
+        &self, action: ControlAction, role: &str, name: &str, request: &RequestState,
     ) -> Result<Option<ControlResult>> {
         if !matches!(role, "textbox" | "button") || name.is_empty() {
             return Err(Failure::new("CONFIGURATION", "A supported role and exact accessible name are required."));
         }
-        let Some(control) = self.root.find(role, name, check)? else { return Ok(None); };
-        check()?;
+        let Some(control) = self.root.find(role, name, &|| request.check())? else { return Ok(None); };
+        request.check()?;
         if !control.ready(matches!(action, ControlAction::Fill(_)))? {
             return Ok(None);
         }
-        check()?;
+        request.check()?;
         let text = match (action, role) {
             (ControlAction::ReadText, "textbox") => Some(control.text()?),
-            (ControlAction::Fill(text), "textbox") => { control.fill(&text, check)?; None }
-            (ControlAction::Click, "button") => { control.click(check)?; None }
+            (ControlAction::Fill(text), "textbox") => { control.fill(&text, request)?; None }
+            (ControlAction::Click, "button") => { control.click(request)?; None }
             _ => return Err(Failure::new("CONFIGURATION", "The action does not support this role.")),
         };
         Ok(Some(ControlResult { text }))

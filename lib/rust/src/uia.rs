@@ -1,7 +1,7 @@
 //! UI Automation objects belong to the MTA worker which created them.
 
 use crate::{
-    engine::{ControlAction, ControlResult},
+    engine::{ControlAction, ControlResult, RequestState},
     error::{Failure, Result},
     windows::{self, WindowState},
 };
@@ -80,18 +80,19 @@ impl Client {
 
     pub(crate) fn perform(
         &self, target: &Target, action: ControlAction, control: Selector<'_>,
-        scope: Option<Selector<'_>>, check: &dyn Fn() -> Result<()>,
+        scope: Option<Selector<'_>>, request: &RequestState,
     ) -> Result<Option<ControlResult>> {
         if !matches!(action, ControlAction::Click) || !matches!(control.role, "button" | "link" | "menuitem") {
             return Err(Failure::new("ACTION", "UI Automation supports click() on buttons, links and menu items."));
         }
+        let check = || request.check();
         let container = if let Some(scope) = scope {
-            let Some(container) = self.find(&target.root, scope, check)? else { return Ok(None); };
+            let Some(container) = self.find(&target.root, scope, &check)? else { return Ok(None); };
             container
         } else {
             target.root.clone()
         };
-        let Some(element) = self.find(&container, control, check)? else { return Ok(None); };
+        let Some(element) = self.find(&container, control, &check)? else { return Ok(None); };
         // SAFETY: the element is live on this worker; stale elements report an HRESULT.
         if !unsafe { element.CurrentIsEnabled() }.map_err(|error| action_error("check whether the control is enabled", error))?.as_bool() {
             return Ok(None);
@@ -100,7 +101,7 @@ impl Client {
         // SAFETY: pattern access and invocation are confined to the owning apartment.
         let invoke: IUIAutomationInvokePattern = unsafe { element.GetCurrentPatternAs(UIA_InvokePatternId) }
             .map_err(|error| action_error("get InvokePattern for the control", error))?;
-        check()?;
+        request.begin_mutation()?;
         unsafe { invoke.Invoke() }.map_err(|error| action_error("invoke the control", error))?;
         Ok(Some(ControlResult { text: None }))
     }
