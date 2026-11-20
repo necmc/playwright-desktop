@@ -51,7 +51,7 @@ fn executable_path(window: &Window) -> Option<PathBuf> {
     Some(PathBuf::from(String::from_utf16(&buffer[..length as usize]).ok()?))
 }
 
-pub(crate) fn is_java_process(window: &Window) -> bool {
+pub(crate) fn has_java_launcher_name(window: &Window) -> bool {
     executable_path(window).is_some_and(|path| {
         path.file_name().and_then(|name| name.to_str()).is_some_and(|name| {
             name.eq_ignore_ascii_case("java.exe") || name.eq_ignore_ascii_case("javaw.exe")

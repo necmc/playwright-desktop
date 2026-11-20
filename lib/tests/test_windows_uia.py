@@ -3,6 +3,7 @@
 import asyncio
 import os
 from pathlib import Path
+from shutil import copyfile
 import subprocess
 import sys
 from tempfile import TemporaryDirectory
@@ -41,10 +42,12 @@ class WindowsUiaTests(unittest.TestCase):
     def setUp(self):
         self.title = f"Playwright desktop UIA {uuid4().hex}"
         self.results = self.directory / f"{uuid4().hex}.txt"
-        process = subprocess.Popen([self.application, self.title, self.results])
+
+    def start_window(self, executable):
+        process = subprocess.Popen([executable, self.title, self.results])
         self.addCleanup(self.stop, process)
-        self.pid = process.pid
         self.wait_for_result("ready")
+        return process.pid
 
     @staticmethod
     def stop(process):
@@ -61,12 +64,13 @@ class WindowsUiaTests(unittest.TestCase):
         self.fail(f"The Windows fixture did not report {value!r}.")
 
     def test_sync_click_opens_and_closes_a_new_dialog_without_java(self):
+        pid = self.start_window(self.application)
         with patch.dict(os.environ), sync_playwright() as playwright:
             os.environ.pop("JAVA_HOME", None)
             with playwright.chromium.launch(channel="msedge") as browser:
                 page = browser.new_page()
-                window = page.desktop.window(pid=self.pid)
-                with page.desktop.expect_window(title=f"{self.title} - Opciones", pid=self.pid) as opened:
+                window = page.desktop.window(pid=pid)
+                with page.desktop.expect_window(title=f"{self.title} - Opciones", pid=pid) as opened:
                     window.get_by_role("button", name="Mostrar opciones").click()
                 dialog = opened.value
                 dialog.get_by_role("button", name="Aceptar").click()
@@ -74,12 +78,24 @@ class WindowsUiaTests(unittest.TestCase):
                 self.wait_for_result("dialog")
 
     def test_async_click_is_scoped_to_the_popup_inside_the_existing_window(self):
-        asyncio.run(self.verify_scoped_click())
+        pid = self.start_window(self.application)
+        asyncio.run(self.verify_scoped_click(pid))
+
+    def test_java_named_windows_use_uia_when_bridge_does_not_recognize_them(self):
+        renamed = self.directory / "java.exe"
+        copyfile(self.application, renamed)
+        pid = self.start_window(renamed)
+        with sync_playwright() as playwright, playwright.chromium.launch(channel="msedge") as browser:
+            page = browser.new_page()
+            window = page.desktop.window(pid=pid)
+            window.get_by_role("button", name="Mostrar aviso").click(timeout=3_000)
+            self.wait_for_result("notice")
 
     def test_one_page_uses_native_windows_and_swing_automatically(self):
         java_home = os.environ.get("PLAYWRIGHT_DESKTOP_TEST_JAVA_HOME")
         if not java_home:
             self.skipTest("Set PLAYWRIGHT_DESKTOP_TEST_JAVA_HOME for the mixed UIA and Swing case.")
+        pid = self.start_window(self.application)
         java_bin = Path(java_home) / "bin"
         fixture = Path(__file__).with_name("fixtures") / "SelectionForm.java"
         subprocess.run(
@@ -90,7 +106,7 @@ class WindowsUiaTests(unittest.TestCase):
         with patch.dict(os.environ, {"JAVA_HOME": java_home}), sync_playwright() as playwright:
             with playwright.chromium.launch(channel="msedge") as browser:
                 page = browser.new_page()
-                native = page.desktop.window(title=self.title, pid=self.pid)
+                native = page.desktop.window(title=self.title, pid=pid)
                 native.get_by_role("button", name="Mostrar aviso").click()
                 with page.desktop.expect_window(title=java_title) as opened:
                     java = subprocess.Popen(
@@ -110,13 +126,13 @@ class WindowsUiaTests(unittest.TestCase):
                 native.get_by_role("group", name="Opciones integradas").get_by_role("button", name="Aplicar").click()
                 self.wait_for_result("inside")
 
-    async def verify_scoped_click(self):
+    async def verify_scoped_click(self, pid):
         with patch.dict(os.environ, {"JAVA_HOME": str(self.directory / "missing-java")}):
             async with async_playwright() as playwright:
                 browser = await playwright.chromium.launch(channel="msedge")
                 try:
                     page = await browser.new_page()
-                    window = page.desktop.window(title=self.title, pid=self.pid)
+                    window = page.desktop.window(title=self.title, pid=pid)
                     await window.get_by_role("button", name="Mostrar aviso").click()
                     await asyncio.to_thread(self.wait_for_result, "notice")
                     with self.assertRaises(AmbiguousMatchError):

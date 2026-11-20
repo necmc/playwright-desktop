@@ -133,16 +133,27 @@ impl WindowsPlatform {
     }
 
     fn check_java_window(
-        &mut self, request: Arc<RequestState>, window: windows::Window,
+        &mut self, request: Arc<RequestState>, window: windows::Window, retry_until: Option<Instant>,
     ) -> Result<Receiver<Result<WindowsProvider>>> {
         self.java()?.submit(request, move |state, request| {
             let prepared = state.backend.prepare_session(request.session.id, &request.session.options, &|| request.check());
-            request.check()?;
-            if state.backend.recognizes(&window) {
-                prepared?;
-                Ok(WindowsProvider::JavaAccessBridge)
-            } else {
-                Ok(WindowsProvider::UiAutomation)
+            loop {
+                request.check()?;
+                if state.backend.recognizes(&window) {
+                    prepared?;
+                    return Ok(WindowsProvider::JavaAccessBridge);
+                }
+
+                let remaining = retry_until.map_or(Duration::ZERO, |deadline| {
+                    deadline.saturating_duration_since(Instant::now())
+                });
+                if prepared.is_err() || remaining.is_zero() {
+                    return Ok(WindowsProvider::UiAutomation);
+                }
+
+                // Swing may create its window before JAB receives the registration.
+                state.backend.poll();
+                thread::sleep(remaining.min(Duration::from_millis(10)));
             }
         })
     }
@@ -192,12 +203,13 @@ impl Platform for WindowsPlatform {
     fn resolve_provider(
         &mut self, request: Arc<RequestState>, window: Self::Window,
     ) -> ProviderSelection<Self::Provider> {
-        if !request.session.options.automatic || windows::is_java_process(&window) {
+        if !request.session.options.automatic {
             return ProviderSelection::Ready(WindowsProvider::JavaAccessBridge);
         }
         let until = java_check_deadline(&request);
+        let retry_until = (!request.immediate && windows::has_java_launcher_name(&window)).then_some(until);
         let fallback = WindowsProvider::UiAutomation;
-        match self.check_java_window(request, window) {
+        match self.check_java_window(request, window, retry_until) {
             Ok(result) => ProviderSelection::Pending { result, until, fallback },
             Err(_) => ProviderSelection::Ready(fallback),
         }
