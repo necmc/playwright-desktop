@@ -161,7 +161,7 @@ Representa una aplicación (asociada a un `pid` y a su ventana principal `hwnd`)
 
 ## 5. Cambios en el Motor Rust (`lib/rust/src/`)
 
-Actualmente [engine.rs](<file:///d:/Workspace/Antigravity/QA%20Automation%20Interop/lib/rust/src/engine.rs>) guarda un único `captured_window: Option<WindowHandle>` por sesión, lo cual impide tener activas al mismo tiempo una `App` padre, un `Window`/`Alert` modal y una `child App`.
+Actualmente [engine.rs](../../../lib/rust/src/engine.rs) guarda un único `captured_window: Option<WindowHandle>` por sesión, lo cual impide tener activas al mismo tiempo una `App` padre, un `Window`/`Alert` modal y una `child App`.
 
 ### 5.1 Registro Multi-Handle por Sesión
 
@@ -173,7 +173,7 @@ Actualmente [engine.rs](<file:///d:/Workspace/Antigravity/QA%20Automation%20Inte
 
 ### 5.2 Nuevas Operaciones Win32
 
-En `Operation::parse` dentro de [engine.rs](<file:///d:/Workspace/Antigravity/QA%20Automation%20Interop/lib/rust/src/engine.rs>) y módulo Win32 [windows.rs](<file:///d:/Workspace/Antigravity/QA%20Automation%20Interop/lib/rust/src/windows.rs>):
+En `Operation::parse` dentro de [engine.rs](../../../lib/rust/src/engine.rs) y módulo Win32 [windows.rs](../../../lib/rust/src/windows.rs):
 
 1. **`bring_to_front`:**
    - Verifica validez de `hwnd` (`IsWindow`).

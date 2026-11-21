@@ -4,7 +4,7 @@
 
 Las instrucciones de arranque y automatización están en el [README de la demo](../demo/README.md).
 
-playwright-desktop integra Playwright Python con aplicaciones de escritorio invocadas desde una web. `lib/` contiene la implementación Python y Rust de `page.desktop`. La demo `pc-info` reúne la web, el formulario Java y el lanzador ClickOnce en `demo/pc-info/`. Su automatización está en `demo/pc-info-automation/`.
+playwright-desktop integra Playwright Python con aplicaciones de escritorio invocadas desde una web mediante `page.expect_app()`, `DesktopContext`, `App`, `Window` y `Alert` acoplados al `BrowserContext`. `lib/` contiene la implementación Python y Rust. La demo `pc-info` reúne la web, el formulario Java y el lanzador ClickOnce en `demo/pc-info/`. Su automatización está en `demo/pc-info-automation/`.
 
 ## Responsabilidades
 
@@ -14,7 +14,7 @@ playwright-desktop integra Playwright Python con aplicaciones de escritorio invo
 | JavaScript | Solicitar la activación ClickOnce y consultar el resultado de la operación. |
 | Lanzador C# | Leer los argumentos de activación y ejecutar el JAR con el runtime Java configurado. |
 | Formulario Java | Precargar los datos del equipo, permitir su edición y devolverlos a la web. |
-| Librería Python/Rust | Extender `Page` con `page.desktop`, localizar ventanas y usar Java Access Bridge o UI Automation según el proveedor disponible. |
+| Librería Python/Rust | Extender `Page` con `page.expect_app()`, asociar un `DesktopContext` por `BrowserContext`, aislar ventanas por sesión (`only_new`), detectar el idioma del SO (`os_language`) y usar Java Access Bridge o UI Automation según el proveedor disponible. |
 
 ## Flujo de la demo
 
@@ -65,7 +65,7 @@ El script de compilación utiliza `javac --release 11` y `jar` para producir el 
 
 El lanzador se compila con `/nowin32manifest` para conservar la identidad de los manifiestos ClickOnce generados por Mage. La publicación de la demo se genera sin firma.
 
-Dentro de `demo/pc-info/`, `start.ps1` prepara las dependencias Python, llama a `launcher-clickonce/build.ps1` y ejecuta Flask en primer plano, con el mismo puerto utilizado para la publicación. Comprueba que el puerto esté disponible y detiene la preparación si falla un paso. El servidor arranca sin recarga automática para mantener un único proceso que se detiene con `Ctrl+C`.
+Dentro de `demo/pc-info/`, `start.ps1` prepara las dependencias Python, llama a `launcher-clickonce/build.ps1` y ejecuta Flask en primer plano, con el mismo puerto utilizado para la publicación. Si detecta el puerto ocupado, pregunta en terminal si debe liberar el proceso y termina con error cuando no se autoriza o falla el cierre. El servidor arranca sin recarga automática para mantener un único proceso que se detiene con `Ctrl+C`.
 
 La dirección predeterminada es `http://127.0.0.1:18765`. El parámetro `-Port` de `start.ps1` configura conjuntamente la web y la publicación ClickOnce.
 
@@ -77,9 +77,9 @@ El lanzador obtiene la ruta de Java de su archivo de configuración. El formular
 
 ### Automatización de la demo
 
-La automatización usa el puerto predeterminado. `run.py` comprueba que la demo responde y ejecuta CP-PI-01. El caso pulsa **Abrir** en Edge. Si ClickOnce solicita confirmación, verifica el nombre y el origen de la demo antes de pulsar **Ejecutar**. La librería espera la ventana Java mediante `page.desktop.expect_window()` y localiza Java Access Bridge mediante `JAVA_HOME`.
+La automatización usa el puerto predeterminado y configura `JAVA_HOME` con `playwright_desktop.configure(...)`. `run.py` comprueba que la demo responde y ejecuta CP-PI-01 dentro de `with page.expect_app(...) as opened:`, usando `opened.context` (`DesktopContext`) con `only_new=True` y `dcontext.os_language` para pulsar **Abrir** en Edge, confirmar el instalador ClickOnce o los avisos del sistema operativo antes de recibir la `App` del formulario Java y cerrar el flujo devolviendo el control al mismo `BrowserContext`.
 
-CP-PI-02 comprueba el clic de apertura de forma independiente con el soporte nativo de Windows. Su Page Object localiza la ventana del navegador con `page.desktop.window(pid=pid, title_prefix=...)`.
+CP-PI-02 comprueba el clic de apertura de forma independiente con el soporte nativo de Windows mediante `page.expect_app(...)`. Su Page Object localiza la ventana del navegador con `dcontext.app(pid=pid, title_prefix=...)` y cierra el diálogo capturado con `close()`.
 
 ### Navegador de la automatización
 

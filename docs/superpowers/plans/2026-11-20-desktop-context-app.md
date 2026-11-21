@@ -11,7 +11,7 @@
 
 **Tech Stack:** Rust 2024 (`pyo3 = 0.30.1`, `windows = 0.62.2`, `maturin`), Python 3.10+ (`playwright >=1.63,<1.66`, `unittest`, `asyncio`).
 
-**Referencia de diseño:** [2026-11-20-desktop-context-app-design.md](file:///d:/Workspace/Antigravity/QA%20Automation%20Interop/docs/superpowers/specs/2026-11-20-desktop-context-app-design.md)
+**Referencia de diseño:** [2026-11-20-desktop-context-app-design.md](../specs/2026-11-20-desktop-context-app-design.md)
 
 ---
 
@@ -338,9 +338,9 @@ git commit -m "refactor(demo): migrar pc-info-automation a page.expect_app, Desk
 - Modify: `lib/README.md`
 - Modify: `docs/documentacion-tecnica.md` (si documenta `page.desktop`)
 
-- [ ] **Step 1: Actualizar `lib/README.md` y documentación con ejemplos del nuevo contrato `page.expect_app` / `DesktopContext` / `App` / `Window` / `Alert`**
-- [ ] **Step 2: Ejecutar verificación integral (`cargo test` + `build_py.ps1` + suite `lib/tests`) y `git status` limpio**
-- [ ] **Step 3: Commit final de documentación**
+- [x] **Step 1: Actualizar `lib/README.md` y documentación con ejemplos del nuevo contrato `page.expect_app` / `DesktopContext` / `App` / `Window` / `Alert`**
+- [x] **Step 2: Ejecutar verificación integral (`cargo test` + `build_py.ps1` + suite `lib/tests`) y `git status` limpio**
+- [x] **Step 3: Commit final de documentación**
 
 ```bash
 git add lib/README.md docs/documentacion-tecnica.md

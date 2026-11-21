@@ -1,6 +1,6 @@
 # playwright-desktop
 
-Extiende el `Page` oficial de Playwright Python con `page.desktop` para interactuar con aplicaciones de escritorio.
+Extiende el `Page` oficial de Playwright Python con `page.expect_app()` y un `DesktopContext` ligado al `BrowserContext` para interactuar con aplicaciones de escritorio.
 
 ## Instalación
 
@@ -17,14 +17,15 @@ Sobre un `page` que ya tengas creado con Playwright:
 ```python
 import playwright_desktop
 
-with page.desktop.expect_window(title="Mi aplicación"):
+with page.expect_app(title="Mi aplicación") as app_info:
     page.get_by_role("button", name="Abrir aplicación").click()
 
-page.desktop.get_by_role("textbox", name="Nombre").fill("Ana")
-page.desktop.get_by_role("button", name="Aceptar").click()
+app = app_info.value
+app.get_by_role("textbox", name="Nombre").fill("Ana")
+app.get_by_role("button", name="Aceptar").click()
 ```
 
-Con Playwright asíncrono, usa `async with` para capturar la ventana y `await` para las acciones.
+Con Playwright asíncrono, usa `async with`, `app = await app_info.value` y `await` para las acciones.
 
 ## Estructura
 
@@ -37,4 +38,5 @@ docs/    Documentación técnica y arquitectura
 ## Más información
 
 - [Demo y automatización](demo/README.md).
-- [API y arquitectura](docs/superpowers/specs/2026-11-17-libreria-python-rust-design.md).
+- [Documentación técnica](docs/documentacion-tecnica.md).
+- [Diseño DesktopContext y App](docs/superpowers/specs/2026-11-20-desktop-context-app-design.md).

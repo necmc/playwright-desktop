@@ -32,14 +32,14 @@ Datos de prueba: fecha `2026-11-19`, equipo `EQUIPO-CLICKONCE` y alias `Integrac
 
 ## Caso CP-PI-02 · Abrir ClickOnce desde el navegador
 
-Verificación independiente que requiere una versión con soporte nativo de Windows. La prueba pulsa **Obtener información** y usa `page.desktop` para accionar **Abrir** en el aviso de Edge o **Abrir archivo** en Descargas. El caso termina al accionar ese control. Registra cuál apareció.
+Verificación independiente que requiere una versión con soporte nativo de Windows. La prueba pulsa **Obtener información** dentro de `page.expect_app(...)`, usa el `DesktopContext` (`dcontext.app(...)`) para accionar **Abrir** en el aviso de Edge o **Abrir archivo** en Descargas y cierra el aviso capturado con `close()`. Registra cuál apareció.
 
 ## Estructura POM
 
 | Ruta | Responsabilidad |
 | --- | --- |
 | `run.py` | Verifica la disponibilidad de la demo y ejecuta CP-PI-01. |
-| `tests/test_flow.py` | Define el recorrido y sus resultados esperados. Captura la ventana con `page.desktop.expect_window()` y la entrega al Page Object con `opened.value`. |
+| `tests/test_flow.py` | Define el recorrido y sus resultados esperados. Usa `page.expect_app()` pasando `opened.context` (`DesktopContext`) a los avisos intermedios y `opened.value` (`App`) al Page Object del formulario. |
 | `tests/test_clickonce.py` | Contiene la verificación independiente del clic de apertura en Edge. |
 | `pages/` | Contiene los objetos de la web, de los avisos de apertura y seguridad, y del formulario Java. |
 | `models/` | Contiene `EquipmentInformation`, el DTO con los tres datos que se comparan a lo largo del flujo. |
