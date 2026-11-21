@@ -3,6 +3,8 @@
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
+from ._errors import DesktopError
+
 MAX_TIMEOUT_MS = 2**32 - 1
 MAX_PROCESS_ID = 2**32 - 1
 CLICK_ROLES = ("button", "link", "menuitem")
@@ -75,6 +77,26 @@ def validate_predicate(predicate: Callable[[Any], bool] | None) -> Callable[[Any
     if predicate is not None and not callable(predicate):
         raise ValueError("predicate must be callable.")
     return predicate
+
+
+def apply_reply_metadata(target: Any, reply: Any) -> None:
+    handle = getattr(reply, "handle", 0)
+    if handle:
+        target._handle = handle
+    pid = getattr(reply, "pid", None)
+    if pid is not None:
+        target._pid = pid
+    title = getattr(reply, "title", None)
+    if title is not None:
+        target._title = title
+
+
+def accept_captured(candidate: Any, predicate: Callable[[Any], bool] | None, *, register=None) -> Any:
+    if predicate is not None and not predicate(candidate):
+        raise DesktopError("Captured desktop window did not satisfy the expected predicate.")
+    if register is not None and candidate._handle:
+        register(candidate._handle, candidate)
+    return candidate
 
 
 def validate_control(role: str, name: str) -> None:

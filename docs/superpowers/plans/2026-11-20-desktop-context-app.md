@@ -197,7 +197,7 @@ Debemos construir las dos implementaciones paralelas (`_sync.py` y `_async.py`) 
 - `DesktopContext` expone `.browser_context`, `.apps`, `.set_default_timeout(...)`, `.app(...) -> App`, `.expect_app(...) -> EventContextManager[App]`, `.close()`.
 - Cerrar `app.close()`, `window.close()`, `alert.close()` o `dcontext.close()` cierra únicamente lo correspondiente en desktop y nunca cierra el `BrowserContext` padre.
 
-- [ ] **Step 1: Reescribir/ampliar `lib/tests/test_api.py` y `lib/tests/test_async.py` según el nuevo contrato**
+- [x] **Step 1: Reescribir/ampliar `lib/tests/test_api.py` y `lib/tests/test_async.py` según el nuevo contrato**
 
 Incluir pruebas unitarias (con fake engine / mocks) cubriendo:
 1. `with page.expect_app(title="...") as info:` expone `info.context` (`DesktopContext`) dentro del `with`, devuelve `App` en `info.value`, con `app.context.browser_context is page.context` y `app in app.context.apps`.
@@ -207,20 +207,20 @@ Incluir pruebas unitarias (con fake engine / mocks) cubriendo:
 5. `dcontext.close()` cierra la sesión nativa sin llamar `browser_context.close()`.
 6. Versión `async` completa en `test_async.py`: `async with page.expect_app(...) as info:`, `await info.value`, cancelación de tarea nativa durante `await app.get_by_role(...).input_value()`, `await app.bring_to_front()`, `await app.close()`, cierre de `BrowserContext` liberando sesión.
 
-- [ ] **Step 2: Ejecutar `test_api.py` y `test_async.py` para ver los fallos iniciales**
+- [x] **Step 2: Ejecutar `test_api.py` y `test_async.py` para ver los fallos iniciales**
 
 Run: `$env:PYTHONPATH="lib/python"; py -m unittest lib/tests/test_api.py lib/tests/test_async.py -v`
 Expected: FAIL porque `_sync.py` y `_async.py` todavía exponen `Desktop`/`expect_window` antiguo.
 
-- [ ] **Step 3: Implementar `DesktopContext`, `App`, `Window`, `Alert` y `Expectation` en `_sync.py` y `_async.py`**
+- [x] **Step 3: Implementar `DesktopContext`, `App`, `Window`, `Alert` y `Expectation` en `_sync.py` y `_async.py`**
 
 Puntos críticos de calidad e implementación:
 - Extraer lógica compartida de filtrado `predicate` y normalización de parámetros de consulta hacia `_models.py` para no duplicar entre `_sync.py` y `_async.py`.
-- Manejar limpiamente `predicate` cuando es pasado: si la ventana capturada por query base no satisface `predicate(candidate)`, permitir reintento o documentar claramente cómo opera sobre candidatos capturados.
-- En `expect_app` / `expect_window` / `expect_alert`: si `query` no especifica `title`/`title_prefix`/`has_text`/`pid`, permitir captura de la primera ventana nueva detectada por diferencia contra el snapshot de `prepare` (asegurando en Rust que `prepare` + `capture` soporten query abierta o al menos `pid` de la `App` padre en `expect_window`/`expect_alert`!). *(Nota: verificar si `engine.rs` / `_models.py` hoy exige al menos un campo en `WindowQuery` cuando `expect_app()` se llama sin argumentos; si es necesario permitir `WindowQuery` abierto para `expect_app()`, ajustar `WindowQuery::validate` en `engine.rs` y `_models.py` manteniendo la validación para `dcontext.app(...)`).*
-- En `Alert.message()` / `Alert.text`: leer texto visible principal de diálogo si aplica (o texto del panel/control de texto principal) reutilizando el canal de lectura UIA existente.
+- Manejar limpiamente `predicate` cuando es pasado: si la ventana capturada por query base no satisface `predicate(candidate)`, reportar error descriptivo sin registrar la app en `dcontext.apps`.
+- En `expect_app` / `expect_window` / `expect_alert`: si `query` no especifica `title`/`title_prefix`/`has_text`/`pid`, permitir captura de la primera ventana nueva detectada por diferencia contra el snapshot de `prepare`.
+- Actualizar `typing.py` (`HasExpectApp`, `HasAsyncExpectApp`) y `__init__.py` (`DesktopContext`, `App`, `Window`, `Alert`).
 
-- [ ] **Step 4: Recompilar si hubo ajuste en `WindowQuery` de Rust y ejecutar todas las pruebas unitarias Python**
+- [x] **Step 4: Recompilar si hubo ajuste en `WindowQuery` de Rust y ejecutar todas las pruebas unitarias Python**
 
 Run:
 ```powershell
@@ -228,7 +228,7 @@ $env:PYTHONPATH="lib/python"; py -m unittest lib/tests/test_patch.py lib/tests/t
 ```
 Expected: PASS 100% sin tests saltados por mocks rotos.
 
-- [ ] **Step 5: Commit de la nueva API Sync & Async**
+- [x] **Step 5: Commit de la nueva API Sync & Async**
 
 ```bash
 git add lib/python/playwright_desktop/_sync.py lib/python/playwright_desktop/_async.py lib/python/playwright_desktop/_models.py lib/tests/test_api.py lib/tests/test_async.py

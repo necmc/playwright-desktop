@@ -9,10 +9,12 @@ from ._errors import (
 )
 from ._patch import install, uninstall
 from ._runtime import configure
+from ._sync import Alert, App, DesktopContext, Window
 
 install()
 
 __all__ = [
+    "Alert", "App", "DesktopContext", "Window",
     "configure", "install", "uninstall", "DesktopError", "DesktopTimeoutError", "PatchConflictError",
     "DesktopConfigurationError", "BridgeUnavailableError", "AmbiguousMatchError",
     "StaleWindowError", "DesktopActionError", "DesktopBusyError", "DesktopClosedError",

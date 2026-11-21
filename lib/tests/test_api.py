@@ -5,20 +5,32 @@ from unittest.mock import patch
 
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
-from playwright_desktop import _backend, _platform
-from playwright_desktop._errors import DesktopConfigurationError, DesktopTimeoutError, UnsupportedPlatformError
-from playwright_desktop._models import WindowQuery, validate_control, validate_timeout, validate_text
-from playwright_desktop._runtime import Session
-from playwright_desktop._sync import Desktop
-from test_patch import FakePage
+import playwright_desktop
+from playwright_desktop import _backend, _patch, _platform, _runtime
+from playwright_desktop._errors import (
+    DesktopConfigurationError,
+    DesktopError,
+    DesktopTimeoutError,
+    UnsupportedPlatformError,
+)
+from playwright_desktop._models import WindowQuery, validate_control, validate_text, validate_timeout
+from playwright_desktop._sync import Alert, App, DesktopContext, Window
+from test_patch import FakeContext, FakePage
 
 
 class ApiTests(unittest.TestCase):
+    def setUp(self):
+        playwright_desktop.install()
+
+    def tearDown(self):
+        _runtime.reset_defaults()
+
     def test_query_requires_a_title_or_a_positive_pid(self):
         self.assertEqual(WindowQuery("My window", 42).title, "My window")
         self.assertEqual(WindowQuery(None, 42).pid, 42)
         self.assertEqual(WindowQuery(None, 42, "Opciones").title_prefix, "Opciones")
         self.assertEqual(WindowQuery(has_text="Windows protegió su PC").has_text, "Windows protegió su PC")
+        self.assertTrue(WindowQuery.capture().allow_empty)
         for title, pid in ((None, None), ("", 42), ("My window", 0), ("My window", True)):
             with self.assertRaises(ValueError):
                 WindowQuery(title, pid)
@@ -59,26 +71,140 @@ class ApiTests(unittest.TestCase):
                     _backend.load_extension()
                 load_extension.assert_not_called()
 
-    def test_automatic_window_capture_requires_no_java_home(self):
+    def test_automatic_app_capture_requires_no_java_home(self):
         page = FakePage()
-        desktop = Desktop(Session(page))
+        expect_app = _patch.ExpectAppMethod("sync").__get__(page, FakePage)
         with patch.dict(os.environ), patch("playwright_desktop._runtime._get_engine") as get_engine:
             os.environ.pop("JAVA_HOME", None)
-            with desktop.expect_window(title="Opciones"):
-                pass
+            get_engine.return_value.invoke.side_effect = [
+                SimpleNamespace(handle=1, pid=None, title=None, text=None),
+                SimpleNamespace(handle=2, pid=404, title="Opciones", text=None),
+            ]
+            with expect_app(title="Opciones") as opened:
+                self.assertIsInstance(opened.context, DesktopContext)
+            app = opened.value
+        self.assertIsInstance(app, App)
+        self.assertEqual(app.pid, 404)
+        self.assertEqual(app.title, "Opciones")
         get_engine.return_value.open_auto_session.assert_called_once_with(None, explicit=False)
-        desktop.close()
+        app.context.close()
+        self.assertFalse(page.context.is_closed())
+
+    def test_expect_app_returns_app_and_intermediate_apps_share_app_interface(self):
+        context = FakeContext()
+        page = FakePage(context=context)
+        expect_app = _patch.ExpectAppMethod("sync").__get__(page, FakePage)
+        session = _runtime.session_for_context(context)
+        self.addCleanup(session.close_nowait)
+
+        replies = [
+            SimpleNamespace(handle=1, pid=None, title=None, text=None),
+            SimpleNamespace(handle=9, pid=11520, title="", text=None),
+            SimpleNamespace(handle=2, pid=8080, title="Información del equipo", text=None),
+            SimpleNamespace(handle=2, pid=8080, title="Información del equipo", text=None),
+            SimpleNamespace(handle=2, pid=8080, title="Información del equipo", text=None),
+        ]
+        with patch.object(session, "call", side_effect=replies) as request:
+            with expect_app(title="Información del equipo") as opened:
+                dcontext = opened.context
+                intermediate = dcontext.app(has_text="Windows protegió su PC")
+                self.assertIsInstance(intermediate, App)
+                intermediate.get_by_role("link", name="Más información").click()
+
+            app = opened.value
+            self.assertIs(app.context, dcontext)
+            self.assertIs(dcontext.browser_context, context)
+            self.assertEqual(dcontext.apps, (app,))
+            app.get_by_role("textbox", name="Alias").fill("QA")
+            app.bring_to_front()
+
+        self.assertEqual(
+            [call.args[0] for call in request.call_args_list],
+            ["prepare", "click", "capture", "fill", "bring_to_front"],
+        )
+        self.assertEqual(request.call_args_list[1].kwargs["has_text"], "Windows protegió su PC")
+        self.assertEqual(request.call_args_list[4].kwargs["window_id"], 2)
+
+    def test_app_close_and_window_and_alert_scope_without_closing_browser_context(self):
+        page = FakePage()
+        expect_app = _patch.ExpectAppMethod("sync").__get__(page, FakePage)
+        session = _runtime.session_for_context(page.context)
+        self.addCleanup(session.close_nowait)
+
+        replies = [
+            SimpleNamespace(handle=10, pid=None, title=None),
+            SimpleNamespace(handle=20, pid=500, title="Principal"),
+            SimpleNamespace(handle=21, pid=None, title=None),
+            SimpleNamespace(handle=22, pid=500, title="Opciones"),
+            SimpleNamespace(handle=23, pid=None, title=None),
+            SimpleNamespace(handle=24, pid=500, title="Error"),
+            SimpleNamespace(handle=24, pid=None, title=None),
+            SimpleNamespace(handle=20, pid=None, title=None),
+        ]
+        with patch.object(session, "call", side_effect=replies) as request:
+            with expect_app() as opened:
+                pass
+            app = opened.value
+            with app.expect_window(title="Opciones") as win_info:
+                pass
+            win = win_info.value
+            self.assertIsInstance(win, Window)
+            self.assertIs(win.app, app)
+            self.assertIs(win.context, app.context)
+
+            with app.expect_alert(has_text="Campo requerido") as alert_info:
+                pass
+            alert = alert_info.value
+            self.assertIsInstance(alert, Alert)
+            self.assertIsInstance(alert, Window)
+            alert.close()
+            app.close()
+
+        self.assertEqual(request.call_args_list[2].kwargs["pid"], 500)
+        self.assertEqual(request.call_args_list[4].kwargs["pid"], 500)
+        self.assertEqual(request.call_args_list[4].kwargs["has_text"], "Campo requerido")
+        self.assertEqual(request.call_args_list[6].args[0], "close_window")
+        self.assertEqual(request.call_args_list[6].kwargs["window_id"], 24)
+        self.assertEqual(request.call_args_list[7].args[0], "close_window")
+        self.assertEqual(request.call_args_list[7].kwargs["window_id"], 20)
+        self.assertEqual(app.context.apps, ())
+        self.assertFalse(page.context.is_closed())
+
+    def test_expect_child_app_launches_separate_process_without_parent_pid(self):
+        page = FakePage()
+        expect_app = _patch.ExpectAppMethod("sync").__get__(page, FakePage)
+        session = _runtime.session_for_context(page.context)
+        self.addCleanup(session.close_nowait)
+        replies = [
+            SimpleNamespace(handle=1, pid=None, title=None),
+            SimpleNamespace(handle=2, pid=100, title="Launcher"),
+            SimpleNamespace(handle=3, pid=None, title=None),
+            SimpleNamespace(handle=4, pid=200, title="Java App"),
+        ]
+        with patch.object(session, "call", side_effect=replies) as request:
+            with expect_app(title="Launcher") as launcher_info:
+                pass
+            launcher = launcher_info.value
+            with launcher.expect_child_app(title="Java App") as child_info:
+                pass
+            child = child_info.value
+
+        self.assertIsInstance(child, App)
+        self.assertIs(child.context, launcher.context)
+        self.assertEqual(request.call_args_list[2].kwargs["pid"], None)
+        self.assertEqual(launcher.context.apps, (launcher, child))
 
     def test_a_popup_scope_is_sent_with_the_action(self):
         page = FakePage()
-        session = Session(page)
-        desktop = Desktop(session)
+        session = _runtime.session_for_context(page.context)
+        self.addCleanup(session.close_nowait)
+        dcontext = DesktopContext(session)
         for role in ("dialog", "pane"):
             with self.subTest(role=role), patch.object(
                 session, "call", return_value=SimpleNamespace(handle=4)
             ) as request:
-                popup = desktop.window(title="Edge", pid=42).get_by_role(role, name="Descargas")
-                link = popup.get_by_role("link", name="Abrir archivo")
+                pane = dcontext.app(title="Edge", pid=42).get_by_role(role, name="Descargas")
+                link = pane.get_by_role("link", name="Abrir archivo")
                 link.wait_for(timeout=500)
                 self.assertEqual(request.call_args.args[0], "wait_visible")
                 self.assertEqual(request.call_args.kwargs["scope_role"], role)
@@ -94,50 +220,39 @@ class ApiTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 validate_text(text)
 
-    def test_desktop_actions_use_the_window_captured_without_an_event_variable(self):
-        page = FakePage()
-        session = Session(page)
-        desktop = Desktop(session)
-        with self.assertRaisesRegex(DesktopConfigurationError, "expect_window"):
-            desktop.get_by_role("button", name="Confirmar")
-
-        replies = [SimpleNamespace(handle=handle) for handle in (1, 2, 2, 2, 2)]
-        with patch.object(session, "call", side_effect=replies) as request:
-            with desktop.expect_window(title="Información del equipo"):
-                pass
-            desktop.get_by_role("textbox", name="Alias").fill("QA")
-            desktop.get_by_role("button", name="Confirmar").click()
-            desktop.wait_for_closed()
-
-        self.assertEqual([call.args[0] for call in request.call_args_list],
-                         ["prepare", "capture", "fill", "click", "wait_closed"])
-        self.assertEqual([call.kwargs["window_id"] for call in request.call_args_list[2:]], [2, 2, 2])
-
     def test_expired_capture_cancels_the_reservation_without_waiting_again(self):
         page = FakePage()
-        session = Session(page)
-        desktop = Desktop(session)
+        expect_app = _patch.ExpectAppMethod("sync").__get__(page, FakePage)
+        session = _runtime.session_for_context(page.context)
+        self.addCleanup(session.close_nowait)
         with (
             patch.object(session, "call", return_value=SimpleNamespace(handle=7)) as request,
             patch.object(session, "cancel_capture") as cancel,
             patch("playwright_desktop._timing.monotonic", side_effect=(1.0, 1.1)),
         ):
             with self.assertRaises(DesktopTimeoutError):
-                with desktop.expect_window(title="Información del equipo", timeout=50):
+                with expect_app(title="Información del equipo", timeout=50):
                     pass
 
-        request.assert_called_once_with("prepare", title="Información del equipo", pid=None, timeout=50)
+        request.assert_called_once_with(
+            "prepare", title="Información del equipo", pid=None, title_prefix="", has_text="", timeout=50
+        )
         cancel.assert_called_once_with(7)
 
-    def test_window_has_text_forwards_the_visible_text_filter(self):
+    def test_predicate_rejection_raises_error_and_does_not_register_app(self):
         page = FakePage()
-        session = Session(page)
-        desktop = Desktop(session)
-        with patch.object(session, "call", return_value=SimpleNamespace(handle=9)) as request:
-            desktop.window(has_text="Windows protegió su PC").get_by_role("link", name="Más información").click()
-        self.assertEqual(request.call_args.kwargs["has_text"], "Windows protegió su PC")
-        self.assertEqual(request.call_args.kwargs["title"], "")
-        self.assertEqual(request.call_args.kwargs["title_prefix"], "")
+        expect_app = _patch.ExpectAppMethod("sync").__get__(page, FakePage)
+        session = _runtime.session_for_context(page.context)
+        self.addCleanup(session.close_nowait)
+        replies = [
+            SimpleNamespace(handle=1, pid=None, title=None),
+            SimpleNamespace(handle=2, pid=99, title="Otra ventana"),
+        ]
+        with patch.object(session, "call", side_effect=replies):
+            with self.assertRaises(DesktopError):
+                with expect_app(predicate=lambda app: app.title == "Esperada") as opened:
+                    pass
+        self.assertEqual(opened.context.apps, ())
 
 
 if __name__ == "__main__":
