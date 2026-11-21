@@ -21,8 +21,7 @@ if (-not $JdkHome -or -not (Test-Path -LiteralPath (Join-Path $JdkHome 'bin/java
     $JdkHome = Split-Path (Split-Path $compiler.Source)
 }
 if (-not $JavaHome) {
-    $openWebStartJava = 'D:/Program Files/OpenWebStart/jre'
-    $JavaHome = if (Test-Path -LiteralPath (Join-Path $openWebStartJava 'bin/javaw.exe')) { $openWebStartJava } else { $JdkHome }
+    $JavaHome = $JdkHome
 }
 $JavaHome = [System.IO.Path]::GetFullPath($JavaHome)
 if (-not (Test-Path -LiteralPath (Join-Path $JavaHome 'bin/javaw.exe'))) {
