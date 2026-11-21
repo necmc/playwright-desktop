@@ -17,23 +17,27 @@ class PcInfoFlowTests(DemoTestCase):
         """CP-PI-01 · Confirmar datos y generar el PDF."""
         self.web.open()
         page = self.page
-        page.desktop.set_default_timeout(15_000)
 
         expected = EquipmentInformation(
             date="2026-11-19", computer_name="EQUIPO-CLICKONCE", alias="Integración Ñ"
         )
 
-        browser = BrowserClickOnce(page)
-        installer = ClickOnceInstaller(
-            page, application_name=InformationForm.TITLE, base_url=self.web.base_url,
-        )
-        sscreen = SScreenWarning(page)
-        form_ready = page.desktop.window(title=InformationForm.TITLE).get_by_role("button", name="Confirmar")
         sscreen_visible = False
         try:
-            with page.desktop.expect_window(
+            with page.expect_app(
                 title=InformationForm.TITLE, timeout=ACTIVATION_TIMEOUT_MS
             ) as opened:
+                dcontext = opened.context
+                dcontext.set_default_timeout(15_000)
+                browser = BrowserClickOnce(dcontext, page)
+                installer = ClickOnceInstaller(
+                    dcontext, application_name=InformationForm.TITLE, base_url=self.web.base_url,
+                )
+                sscreen = SScreenWarning(dcontext, page)
+                form_ready = dcontext.app(title=InformationForm.TITLE, only_new=True).get_by_role(
+                    "button", name="Confirmar"
+                )
+
                 self.web.request_information()
                 browser.click_open()
                 clickonce_confirmed = False
@@ -41,13 +45,13 @@ class PcInfoFlowTests(DemoTestCase):
                 while monotonic() < deadline:
                     if not clickonce_confirmed:
                         clickonce_confirmed = installer.confirm_if_present()
+                    if not sscreen_visible:
+                        sscreen_visible = sscreen.confirm_if_present()
                     try:
-                        form_ready.wait_for(timeout=400)
+                        form_ready.wait_for(timeout=150)
                         break
                     except DesktopTimeoutError:
                         pass
-                    if not sscreen_visible:
-                        sscreen_visible = sscreen.confirm_if_present()
         except DesktopTimeoutError:
             if sscreen_visible:
                 raise DesktopTimeoutError(
@@ -55,7 +59,8 @@ class PcInfoFlowTests(DemoTestCase):
                 ) from None
             raise
 
-        form = InformationForm(opened.value)
+        app = opened.value
+        form = InformationForm(app)
         form.fill(expected)
         form.confirm()
 

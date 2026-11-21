@@ -1,33 +1,33 @@
 """Aviso de MS SScreen."""
 
 from playwright.sync_api import Page
-from playwright_desktop import DesktopTimeoutError
+from playwright_desktop import DesktopContext, DesktopTimeoutError
+
+_LABELS = {
+    True: ("Windows protegió su PC", "Más información", "Ejecutar de todas formas"),
+    False: ("Windows protected your PC", "More info", "Run anyway"),
+}
 
 
 class SScreenWarning:
-    def __init__(self, page: Page):
+    def __init__(self, dcontext: DesktopContext, page: Page):
         self.page = page
-        es_window = page.desktop.window(has_text="Windows protegió su PC")
-        en_window = page.desktop.window(has_text="Windows protected your PC")
-        self.es_details = es_window.get_by_role("link", name="Más información")
-        self.es_run_anyway = es_window.get_by_role("button", name="Ejecutar de todas formas")
-        self.en_details = en_window.get_by_role("link", name="More info")
-        self.en_run_anyway = en_window.get_by_role("button", name="Run anyway")
+        heading, self._details_name, self._run_name = _LABELS[
+            dcontext.os_language.lower().startswith("es")
+        ]
+        self._app = dcontext.app(has_text=heading, only_new=True)
+        self._details = self._app.get_by_role("link", name=self._details_name)
 
     def confirm_if_present(self) -> bool:
-        for details, run_anyway in (
-            (self.es_details, self.es_run_anyway),
-            (self.en_details, self.en_run_anyway),
-        ):
-            try:
-                details.wait_for(timeout=0)
-            except DesktopTimeoutError:
-                continue
+        try:
+            self._details.wait_for(timeout=0)
+        except DesktopTimeoutError:
+            return False
 
-            details.click(timeout=3_000)
-            run_anyway.wait_for(timeout=3_000)
-            self.page.wait_for_timeout(700)
-            run_anyway.click(timeout=3_000)
-            return True
-
-        return False
+        self._details.click(timeout=3_000)
+        run_anyway = self._app.get_by_role("button", name=self._run_name)
+        run_anyway.wait_for(timeout=3_000)
+        self.page.wait_for_timeout(200)
+        run_anyway.click(timeout=3_000)
+        print(f"SScreen: clic en {self._details_name} y {self._run_name}.", flush=True)
+        return True

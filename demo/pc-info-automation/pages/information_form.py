@@ -1,15 +1,17 @@
+from playwright_desktop import App
+
 from models.equipment_information import EquipmentInformation
 
 
 class InformationForm:
     TITLE = "Información del equipo"
 
-    def __init__(self, window):
-        self.window = window
-        self.date = window.get_by_role("textbox", name="Fecha")
-        self.computer_name = window.get_by_role("textbox", name="Nombre del equipo")
-        self.alias = window.get_by_role("textbox", name="Alias")
-        self.confirm_button = window.get_by_role("button", name="Confirmar")
+    def __init__(self, app: App):
+        self.app = app
+        self.date = app.get_by_role("textbox", name="Fecha")
+        self.computer_name = app.get_by_role("textbox", name="Nombre del equipo")
+        self.alias = app.get_by_role("textbox", name="Alias")
+        self.confirm_button = app.get_by_role("button", name="Confirmar")
 
     def fill(self, information: EquipmentInformation) -> None:
         self.date.fill(information.date)
@@ -18,4 +20,4 @@ class InformationForm:
 
     def confirm(self) -> None:
         self.confirm_button.click()
-        self.window.wait_for_closed()
+        self.app.wait_for_closed()

@@ -12,17 +12,20 @@ $baseUrl = "http://127.0.0.1:$Port"
 $webRoot = Join-Path $PSScriptRoot 'web'
 $buildScript = Join-Path $PSScriptRoot 'launcher-clickonce/build.ps1'
 
-# Fallar antes de instalar o compilar si ya hay otro servidor en este puerto.
-$listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, $Port)
-try {
-    $listener.Server.ExclusiveAddressUse = $true
-    $listener.Start()
-}
-catch {
-    throw "No se puede utilizar el puerto $Port. Detén el servidor que lo ocupa o ejecuta este script con -Port 18766. Detalle: $($_.Exception.Message)"
-}
-finally {
-    $listener.Stop()
+# Si el puerto está ocupado, preguntar antes de liberarlo o detener la ejecución.
+$owners = @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique)
+if ($owners.Count -gt 0) {
+    $answer = Read-Host "El puerto $Port está ocupado (PID $($owners -join ', ')). ¿Deseas liberar el puerto? [s/N]"
+    if (([string]$answer).Trim() -notmatch "^(s|si|s$([char]0x00ED)|y|yes)$") {
+        throw "No se puede utilizar el puerto $Port porque sigue ocupado."
+    }
+    try {
+        Stop-Process -Id $owners -Force -ErrorAction Stop
+    }
+    catch {
+        throw "No se pudo liberar el puerto $Port. Detalle: $($_.Exception.Message)"
+    }
+    Write-Host "Puerto $Port liberado."
 }
 
 if (-not (Get-Command $Python -ErrorAction SilentlyContinue)) {

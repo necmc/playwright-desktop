@@ -285,18 +285,18 @@ En la demo real:
 - `Edge` dispara ClickOnce → aviso nativo de Edge (`BrowserClickOnce`) → instalador ClickOnce (`ClickOnceInstaller`) → aviso opcional SmartScreen (`SScreenWarning`) → aplicación Java (`InformationForm`) → cierre Java → continuación fluida en Edge para validar el mensaje, tabla y PDF generado.
 - Todas las interacciones intermedias dentro del `with page.expect_app(...) as app_info:` pasan a recibir `app_info.context` (`DesktopContext`) y adquieren un objeto `App` vía `.app(...)`, sin usar `page.desktop` en ningún archivo.
 
-- [ ] **Step 1: Inspeccionar `demo/pc-info-automation/fixtures/demo.py` para detectar cualquier uso de `page.desktop`**
+- [x] **Step 1: Inspeccionar `demo/pc-info-automation/fixtures/demo.py` para detectar cualquier uso de `page.desktop`**
 
 Read lines 1-100 of `demo/pc-info-automation/fixtures/demo.py` before editing.
 
-- [ ] **Step 2: Migrar page objects de `demo/pc-info-automation/pages/`**
+- [x] **Step 2: Migrar page objects de `demo/pc-info-automation/pages/`**
 
 1. `BrowserClickOnce`: aceptar `(dcontext: DesktopContext, page: Page)` y reemplazar `self.page.desktop.window(...)` por `self.dcontext.app(pid=pid, title_prefix=title_prefix)`.
 2. `ClickOnceInstaller`: aceptar `(dcontext: DesktopContext, ...)` y usar `dcontext.app(title=...)`.
 3. `SScreenWarning`: aceptar `(dcontext: DesktopContext, page: Page)` y usar `dcontext.app(has_text=...)`.
 4. `InformationForm`: renombrar parámetro/atributo `window` a `app` (`App`) usando `self.app.get_by_role(...)` y `self.app.wait_for_closed()` (más `close()` si aplica en futuras pruebas).
 
-- [ ] **Step 3: Migrar `test_flow.py`, `test_clickonce.py` y `fixtures/demo.py`**
+- [x] **Step 3: Migrar `test_flow.py`, `test_clickonce.py` y `fixtures/demo.py`**
 
 1. En `test_flow.py`:
    ```python
@@ -317,13 +317,13 @@ Read lines 1-100 of `demo/pc-info-automation/fixtures/demo.py` before editing.
 2. En `test_clickonce.py`: envolver en `with page.expect_app(title_prefix="Ejecución de la aplicación", ...)` (o equivalente EN/ES) usando `app_info.context` para `BrowserClickOnce` y cerrar limpiamente el diálogo capturado con `app_info.value.close()`.
 3. Confirmar por grep que no queda ninguna referencia a `page.desktop` en `demo/`.
 
-- [ ] **Step 4: Validar ejecución E2E de `demo/pc-info-automation/run_local.ps1`**
+- [x] **Step 4: Validar ejecución E2E de `demo/pc-info-automation/run_local.ps1`**
 
 Con los servidores locales de la demo levantados (`demo/pc-info/start.ps1`):
 Run: `demo/pc-info-automation/run_local.ps1`
 Expected: `CP-PI-01` (y `CP-PI-02`) ejecutan completo hasta descargar y verificar el PDF sin errores y sin dejar procesos colgados.
 
-- [ ] **Step 5: Commit de migración de la demo**
+- [x] **Step 5: Commit de migración de la demo**
 
 ```bash
 git add demo/pc-info-automation/
