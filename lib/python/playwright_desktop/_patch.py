@@ -41,29 +41,12 @@ class ExpectAppMethod:
     def __init__(self, mode: str):
         self._mode = mode
 
-    def _call(
-        self,
-        page,
-        *,
-        title: str | None = None,
-        pid: int | None = None,
-        title_prefix: str | None = None,
-        has_text: str | None = None,
-        predicate=None,
-        timeout: float | None = None,
-    ):
+    def _call(self, page, *args, **kwargs):
         from ._runtime import context_facade, session_for_context
 
         session = session_for_context(page.context)
         dcontext = context_facade(session, self._mode, _facade_factory(self._mode))
-        return dcontext.expect_app(
-            title=title,
-            pid=pid,
-            title_prefix=title_prefix,
-            has_text=has_text,
-            predicate=predicate,
-            timeout=timeout,
-        )
+        return dcontext.expect_app(*args, **kwargs)
 
     def __get__(self, page, owner=None):
         if page is None:

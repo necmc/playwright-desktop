@@ -246,12 +246,12 @@ git commit -m "feat(py): implementar DesktopContext, App, Window y Alert en sync
 **Contexto clave:**
 Estas suites prueban contra ventanas reales de Java Swing (`SelectionForm.java`) y Win32/UIA nativo en Windows x64. Hay que adaptarlas al nuevo API (`FakeContext`, `playwright_desktop.configure(...)`, `expect_app`, `App`, `expect_window` / `expect_alert`, `bring_to_front`, `close`) y añadir pruebas reales de cierre de ventana y foco.
 
-- [ ] **Step 1: Actualizar `lib/tests/test_selection.py` y `lib/tests/test_windows_uia.py`**
+- [x] **Step 1: Actualizar `lib/tests/test_selection.py` y `lib/tests/test_windows_uia.py`**
 
 1. Reemplazar `Desktop(Session(page))` / `page.desktop.expect_window(...)` por `FakeContext` + `DesktopContext` (o `page.expect_app(...)` real usando el parche instalado sobre un `FakePage` con `context=FakeContext()`).
 2. Agregar un caso en `test_windows_uia.py` que abra una ventana nativa real de prueba, valide `app.bring_to_front()` y `app.close()`, verificando que la ventana se cierra limpiamente y `app.context.browser_context.is_closed()` sigue siendo `False`.
 
-- [ ] **Step 2: Compilar wheel release e instalar en entorno temporal para ejecutar toda la suite `lib/tests`**
+- [x] **Step 2: Compilar wheel release e instalar en entorno temporal para ejecutar toda la suite `lib/tests`**
 
 Run:
 ```powershell
@@ -260,7 +260,7 @@ lib/scripts/build_py.ps1
 Y ejecutar `unittest discover` sobre `lib/tests` apuntando al wheel recién instalado (y con `PLAYWRIGHT_DESKTOP_TEST_JAVA_HOME` configurado si está disponible el JDK en la máquina para no saltar `test_selection.py`).
 Expected: PASS en `test_patch.py`, `test_api.py`, `test_async.py`, `test_native.py`, `test_windows_uia.py` (y `test_selection.py` con JDK).
 
-- [ ] **Step 3: Commit de tests de integración actualizados**
+- [x] **Step 3: Commit de tests de integración actualizados**
 
 ```bash
 git add lib/tests/test_selection.py lib/tests/test_windows_uia.py

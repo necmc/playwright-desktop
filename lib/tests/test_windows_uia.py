@@ -16,7 +16,7 @@ from playwright.async_api import async_playwright
 from playwright.sync_api import sync_playwright
 
 import playwright_desktop
-from playwright_desktop import AmbiguousMatchError
+from playwright_desktop import AmbiguousMatchError, _runtime
 
 
 UIA_TESTS = sys.platform == "win32" and os.environ.get("PLAYWRIGHT_DESKTOP_TEST_WINDOWS_UIA") == "1"
@@ -43,6 +43,9 @@ class WindowsUiaTests(unittest.TestCase):
         self.title = f"Playwright desktop UIA {uuid4().hex}"
         self.results = self.directory / f"{uuid4().hex}.txt"
 
+    def tearDown(self):
+        _runtime.reset_defaults()
+
     def start_window(self, executable):
         process = subprocess.Popen([executable, self.title, self.results])
         self.addCleanup(self.stop, process)
@@ -64,38 +67,57 @@ class WindowsUiaTests(unittest.TestCase):
         self.fail(f"The Windows fixture did not report {value!r}.")
 
     def test_sync_click_opens_and_closes_a_new_dialog_without_java(self):
-        pid = self.start_window(self.application)
         with patch.dict(os.environ), sync_playwright() as playwright:
             os.environ.pop("JAVA_HOME", None)
             with playwright.chromium.launch(channel="msedge") as browser:
                 page = browser.new_page()
-                window = page.desktop.window(pid=pid)
-                with page.desktop.expect_window(title=f"{self.title} - Opciones", pid=pid) as opened:
-                    window.get_by_role("button", name="Mostrar opciones").click()
+                with page.expect_app(title=self.title) as app_opened:
+                    self.start_window(self.application)
+                app = app_opened.value
+                with app.expect_window(title=f"{self.title} - Opciones") as opened:
+                    app.get_by_role("button", name="Mostrar opciones").click()
                 dialog = opened.value
                 dialog.get_by_role("button", name="Aceptar").click()
                 dialog.wait_for_closed()
                 self.wait_for_result("dialog")
+                app.close()
+                self.assertFalse(page.context.is_closed())
 
-    def test_async_click_is_scoped_to_the_popup_inside_the_existing_window(self):
-        pid = self.start_window(self.application)
-        asyncio.run(self.verify_scoped_click(pid))
+    def test_app_bring_to_front_and_close_preserve_parent_browser_context(self):
+        with patch.dict(os.environ), sync_playwright() as playwright:
+            os.environ.pop("JAVA_HOME", None)
+            with playwright.chromium.launch(channel="msedge") as browser:
+                page = browser.new_page()
+                with page.expect_app(title=self.title) as app_opened:
+                    pid = self.start_window(self.application)
+                app = app_opened.value
+                self.assertEqual(app.pid, pid)
+                self.assertEqual(app.title, self.title)
+                app.bring_to_front()
+                app.close()
+                app.wait_for_closed(timeout=0)
+                self.assertEqual(app.context.apps, ())
+                self.assertFalse(page.context.is_closed())
+                self.assertFalse(page.is_closed())
+
+    def test_async_click_is_scoped_to_the_panel_inside_the_existing_window(self):
+        asyncio.run(self.verify_scoped_click())
 
     def test_java_named_windows_use_uia_when_bridge_does_not_recognize_them(self):
         renamed = self.directory / "java.exe"
         copyfile(self.application, renamed)
-        pid = self.start_window(renamed)
         with sync_playwright() as playwright, playwright.chromium.launch(channel="msedge") as browser:
             page = browser.new_page()
-            window = page.desktop.window(pid=pid)
-            window.get_by_role("button", name="Mostrar aviso").click(timeout=3_000)
+            with page.expect_app(title=self.title) as opened:
+                self.start_window(renamed)
+            app = opened.value
+            app.get_by_role("button", name="Mostrar aviso").click(timeout=3_000)
             self.wait_for_result("notice")
 
     def test_one_page_uses_native_windows_and_swing_automatically(self):
         java_home = os.environ.get("PLAYWRIGHT_DESKTOP_TEST_JAVA_HOME")
         if not java_home:
             self.skipTest("Set PLAYWRIGHT_DESKTOP_TEST_JAVA_HOME for the mixed UIA and Swing case.")
-        pid = self.start_window(self.application)
         java_bin = Path(java_home) / "bin"
         fixture = Path(__file__).with_name("fixtures") / "SelectionForm.java"
         subprocess.run(
@@ -106,9 +128,11 @@ class WindowsUiaTests(unittest.TestCase):
         with patch.dict(os.environ, {"JAVA_HOME": java_home}), sync_playwright() as playwright:
             with playwright.chromium.launch(channel="msedge") as browser:
                 page = browser.new_page()
-                native = page.desktop.window(title=self.title, pid=pid)
+                with page.expect_app(title=self.title) as native_opened:
+                    self.start_window(self.application)
+                native = native_opened.value
                 native.get_by_role("button", name="Mostrar aviso").click()
-                with page.desktop.expect_window(title=java_title) as opened:
+                with native.expect_child_app(title=java_title) as opened:
                     java = subprocess.Popen(
                         [java_bin / "java.exe", f"-Duser.home={self.directory}",
                          "-Djavax.accessibility.assistive_technologies=com.sun.java.accessibility.AccessBridge",
@@ -129,18 +153,21 @@ class WindowsUiaTests(unittest.TestCase):
                 native.get_by_role("group", name="Opciones integradas").get_by_role("button", name="Aplicar").click()
                 self.wait_for_result("inside")
 
-    async def verify_scoped_click(self, pid):
+    async def verify_scoped_click(self):
         with patch.dict(os.environ, {"JAVA_HOME": str(self.directory / "missing-java")}):
             async with async_playwright() as playwright:
                 browser = await playwright.chromium.launch(channel="msedge")
                 try:
                     page = await browser.new_page()
-                    window = page.desktop.window(pid=pid, title_prefix="Playwright desktop UIA ")
-                    await window.get_by_role("button", name="Mostrar aviso").click()
+                    async with page.expect_app(title_prefix="Playwright desktop UIA ") as opened:
+                        pid = self.start_window(self.application)
+                    app = await opened.value
+                    self.assertEqual(app.pid, pid)
+                    await app.get_by_role("button", name="Mostrar aviso").click()
                     await asyncio.to_thread(self.wait_for_result, "notice")
                     with self.assertRaises(AmbiguousMatchError):
-                        await window.get_by_role("button", name="Aplicar").click()
-                    notice = window.get_by_role("group", name="Opciones integradas")
+                        await app.get_by_role("button", name="Aplicar").click()
+                    notice = app.get_by_role("group", name="Opciones integradas")
                     apply = notice.get_by_role("button", name="Aplicar")
                     await apply.wait_for()
                     await apply.click()

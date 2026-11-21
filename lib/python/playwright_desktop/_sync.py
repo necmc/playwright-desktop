@@ -4,10 +4,9 @@ from __future__ import annotations
 
 from typing import Callable, Generic, TypeVar
 
+from ._facade import _DesktopContextBase, _WindowBase, _accept_captured
 from ._models import (
     WindowQuery,
-    accept_captured,
-    apply_reply_metadata,
     query_parameters,
     validate_action_role,
     validate_click_role,
@@ -21,22 +20,8 @@ from ._timing import Deadline
 _T = TypeVar("_T")
 
 
-class DesktopContext:
+class DesktopContext(_DesktopContextBase):
     """Desktop environment correlated 1:1 with a Playwright BrowserContext."""
-
-    def __init__(self, session):
-        self._session = session
-
-    @property
-    def browser_context(self):
-        return self._session.browser_context
-
-    @property
-    def apps(self) -> tuple[App, ...]:
-        return self._session.tracked_apps()
-
-    def set_default_timeout(self, timeout: float) -> None:
-        self._session.set_default_timeout(timeout)
 
     def app(
         self,
@@ -74,43 +59,15 @@ class DesktopContext:
                 title=getattr(reply, "title", None),
             ),
             predicate=predicate,
-            register=self._session.register_app,
+            register=self._register_app,
         )
 
     def close(self) -> None:
+        self._clear_apps()
         self._session.close_nowait()
 
 
-class _WindowBase:
-    def __init__(
-        self,
-        session,
-        dcontext: DesktopContext,
-        query: WindowQuery,
-        handle: int = 0,
-        *,
-        pid: int | None = None,
-        title: str | None = None,
-    ):
-        self._session = session
-        self._dcontext = dcontext
-        self._query = query
-        self._handle = handle
-        self._pid = pid if pid is not None else query.pid
-        self._title = title if title is not None else query.title
-
-    @property
-    def context(self) -> DesktopContext:
-        return self._dcontext
-
-    @property
-    def pid(self) -> int | None:
-        return self._pid
-
-    @property
-    def title(self) -> str | None:
-        return self._title
-
+class _SyncWindow(_WindowBase):
     def get_by_role(self, role: str, *, name: str) -> Locator:
         validate_control(role, name)
         return Locator(self, role, name)
@@ -123,7 +80,7 @@ class _WindowBase:
             timeout=timeout,
             **parameters,
         )
-        apply_reply_metadata(self, reply)
+        self._apply_reply(reply)
         return reply
 
     def bring_to_front(self, *, timeout: float | None = None) -> None:
@@ -140,7 +97,7 @@ class _WindowBase:
         self._on_closed()
 
 
-class Window(_WindowBase):
+class Window(_SyncWindow):
     """Secondary or modal window belonging to an App."""
 
     def __init__(self, session, dcontext: DesktopContext, app: App, query: WindowQuery, handle: int = 0, *, pid=None, title=None):
@@ -156,11 +113,11 @@ class Alert(Window):
     """Alert or dialog modal window belonging to an App."""
 
 
-class App(_WindowBase):
+class App(_SyncWindow):
     """Desktop application (primary window / process) linked to a DesktopContext."""
 
     def _on_closed(self) -> None:
-        self._session.unregister_app(self._handle)
+        self._dcontext._unregister_app(self._handle)
 
     def expect_child_app(
         self,
@@ -181,15 +138,16 @@ class App(_WindowBase):
             timeout=timeout,
         )
 
-    def expect_window(
+    def _expect_owned_window(
         self,
+        window_cls: type[_T],
         *,
         title: str | None = None,
         title_prefix: str | None = None,
         has_text: str | None = None,
-        predicate: Callable[[Window], bool] | None = None,
+        predicate: Callable[[_T], bool] | None = None,
         timeout: float | None = None,
-    ) -> _Expectation[Window]:
+    ) -> _Expectation[_T]:
         query = WindowQuery.capture(
             title=title, pid=self._pid, title_prefix=title_prefix, has_text=has_text
         )
@@ -199,7 +157,7 @@ class App(_WindowBase):
             self._dcontext,
             query,
             timeout,
-            lambda reply: Window(
+            lambda reply: window_cls(
                 self._session,
                 self._dcontext,
                 self,
@@ -209,6 +167,24 @@ class App(_WindowBase):
                 title=getattr(reply, "title", None),
             ),
             predicate=predicate,
+        )
+
+    def expect_window(
+        self,
+        *,
+        title: str | None = None,
+        title_prefix: str | None = None,
+        has_text: str | None = None,
+        predicate: Callable[[Window], bool] | None = None,
+        timeout: float | None = None,
+    ) -> _Expectation[Window]:
+        return self._expect_owned_window(
+            Window,
+            title=title,
+            title_prefix=title_prefix,
+            has_text=has_text,
+            predicate=predicate,
+            timeout=timeout,
         )
 
     def expect_alert(
@@ -220,30 +196,18 @@ class App(_WindowBase):
         predicate: Callable[[Alert], bool] | None = None,
         timeout: float | None = None,
     ) -> _Expectation[Alert]:
-        query = WindowQuery.capture(
-            title=title, pid=self._pid, title_prefix=title_prefix, has_text=has_text
-        )
-        validate_predicate(predicate)
-        return _Expectation(
-            self._session,
-            self._dcontext,
-            query,
-            timeout,
-            lambda reply: Alert(
-                self._session,
-                self._dcontext,
-                self,
-                query,
-                handle=reply.handle,
-                pid=getattr(reply, "pid", None),
-                title=getattr(reply, "title", None),
-            ),
+        return self._expect_owned_window(
+            Alert,
+            title=title,
+            title_prefix=title_prefix,
+            has_text=has_text,
             predicate=predicate,
+            timeout=timeout,
         )
 
 
 class Locator:
-    def __init__(self, window: _WindowBase, role: str, name: str, scope=None):
+    def __init__(self, window: _SyncWindow, role: str, name: str, scope=None):
         self._window, self._role, self._name = window, role, name
         self._scope = scope
 
@@ -314,5 +278,5 @@ class _Expectation(Generic[_T]):
         with self._session.capture_completion(self._capture, self._deadline) as remaining:
             reply = self._session.call("capture", capture_id=self._capture, timeout=remaining)
             candidate = self._factory(reply)
-            self._info._value = accept_captured(candidate, self._predicate, register=self._register)
+            self._info._value = _accept_captured(candidate, self._predicate, register=self._register)
         return False

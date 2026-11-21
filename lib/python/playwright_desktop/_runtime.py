@@ -18,66 +18,96 @@ from ._timing import DEFAULT_TIMEOUT_MS, Deadline
 
 _BINDING_TIMEOUT = "The desktop request timed out while initializing its binding."
 
-_lock = Lock()
+_engine_lock = Lock()
 _engine = None
 _native_error = None
 
-_config_lock = Lock()
-_default_java_home: str | None = None
-_default_timeout: float = DEFAULT_TIMEOUT_MS
 
-_sessions_lock = Lock()
-_sessions: weakref.WeakKeyDictionary[object, "Session"] = weakref.WeakKeyDictionary()
-_facades: weakref.WeakKeyDictionary["Session", dict[str, object]] = weakref.WeakKeyDictionary()
+class _Defaults:
+    def __init__(self):
+        self._lock = Lock()
+        self._java_home: str | None = None
+        self._timeout: float = DEFAULT_TIMEOUT_MS
+
+    def configure(self, *, java_home=None, timeout: float | None = None) -> None:
+        if java_home is None and timeout is None:
+            raise ValueError("Specify java_home and/or timeout.")
+        normalized_java = _backend.normalize_java_home(java_home) if java_home is not None else None
+        validated_timeout = validate_timeout(timeout) if timeout is not None else None
+        with self._lock:
+            if normalized_java is not None:
+                self._java_home = normalized_java
+            if validated_timeout is not None:
+                self._timeout = validated_timeout
+
+    def reset(self) -> None:
+        with self._lock:
+            self._java_home = None
+            self._timeout = DEFAULT_TIMEOUT_MS
+
+    def snapshot(self) -> tuple[str | None, float]:
+        with self._lock:
+            return self._java_home, self._timeout
+
+
+class _SessionRegistry:
+    def __init__(self):
+        self._lock = Lock()
+        self._sessions: weakref.WeakKeyDictionary[object, "Session"] = weakref.WeakKeyDictionary()
+        self._facades: weakref.WeakKeyDictionary["Session", dict[str, object]] = weakref.WeakKeyDictionary()
+
+    def session_for_context(self, browser_context) -> "Session":
+        if hasattr(browser_context, "is_closed") and browser_context.is_closed():
+            raise DesktopClosedError("The parent Playwright BrowserContext is closed.")
+        with self._lock:
+            session = self._sessions.get(browser_context)
+            if session is None or session.is_closed():
+                session = Session(browser_context)
+                self._sessions[browser_context] = session
+            return session
+
+    def context_facade(self, session: "Session", mode: str, factory):
+        with self._lock:
+            per_mode = self._facades.setdefault(session, {})
+            facade = per_mode.get(mode)
+            if facade is None:
+                facade = factory(session)
+                per_mode[mode] = facade
+            return facade
+
+    def discard(self, browser_context, session: "Session") -> None:
+        with self._lock:
+            if browser_context is not None and self._sessions.get(browser_context) is session:
+                del self._sessions[browser_context]
+            self._facades.pop(session, None)
+
+
+_defaults = _Defaults()
+_registry = _SessionRegistry()
 
 
 def configure(*, java_home=None, timeout: float | None = None) -> None:
     """Configure defaults applied to newly opened BrowserContext-scoped desktop sessions."""
-    global _default_java_home, _default_timeout
-    if java_home is None and timeout is None:
-        raise ValueError("Specify java_home and/or timeout.")
-    normalized_java = _backend.normalize_java_home(java_home) if java_home is not None else None
-    validated_timeout = validate_timeout(timeout) if timeout is not None else None
-    with _config_lock:
-        if normalized_java is not None:
-            _default_java_home = normalized_java
-        if validated_timeout is not None:
-            _default_timeout = validated_timeout
+    _defaults.configure(java_home=java_home, timeout=timeout)
 
 
 def reset_defaults() -> None:
-    global _default_java_home, _default_timeout
-    with _config_lock:
-        _default_java_home = None
-        _default_timeout = DEFAULT_TIMEOUT_MS
+    _defaults.reset()
 
 
 def session_for_context(browser_context) -> "Session":
     """Return the active desktop Session correlated 1:1 with a Playwright BrowserContext."""
-    if hasattr(browser_context, "is_closed") and browser_context.is_closed():
-        raise DesktopClosedError("The parent Playwright BrowserContext is closed.")
-    with _sessions_lock:
-        session = _sessions.get(browser_context)
-        if session is None or session.is_closed():
-            session = Session(browser_context)
-            _sessions[browser_context] = session
-        return session
+    return _registry.session_for_context(browser_context)
 
 
 def context_facade(session: "Session", mode: str, factory):
     """Return a single DesktopContext facade per (Session, mode) without strong context cycles."""
-    with _sessions_lock:
-        per_mode = _facades.setdefault(session, {})
-        facade = per_mode.get(mode)
-        if facade is None:
-            facade = factory(session)
-            per_mode[mode] = facade
-        return facade
+    return _registry.context_facade(session, mode, factory)
 
 
 def _get_engine():
     global _engine, _native_error
-    with _lock:
+    with _engine_lock:
         if _engine is None:
             native = _backend.load_extension()
             _native_error = native.NativeError
@@ -103,13 +133,10 @@ class Session:
     def __init__(self, browser_context):
         self._browser_context = weakref.ref(browser_context)
         self._thread = get_ident()
-        with _config_lock:
-            self._java_home = _default_java_home
-            self.default_timeout = _default_timeout
+        self._java_home, self.default_timeout = _defaults.snapshot()
         self._engine = None
         self._id = None
         self._closed = False
-        self._apps: dict[int, weakref.ref] = {}
         owner = weakref.ref(self)
 
         def on_close(*_):
@@ -149,25 +176,6 @@ class Session:
 
     def timeout(self, timeout):
         return self.default_timeout if timeout is None else validate_timeout(timeout)
-
-    def register_app(self, handle: int, app) -> None:
-        self._apps[handle] = weakref.ref(app)
-
-    def unregister_app(self, handle: int) -> None:
-        self._apps.pop(handle, None)
-
-    def tracked_apps(self) -> tuple:
-        live = []
-        stale = []
-        for handle, ref in self._apps.items():
-            item = ref()
-            if item is None:
-                stale.append(handle)
-            else:
-                live.append(item)
-        for handle in stale:
-            self._apps.pop(handle, None)
-        return tuple(live)
 
     def _open_session(self, engine, backend_argument: str | None) -> None:
         self._id = _native_call(engine.open_auto_session, backend_argument, explicit=self._java_home is not None)
@@ -223,12 +231,6 @@ class Session:
     def close_nowait(self):
         if not self._closed:
             self._closed = True
-            self._apps.clear()
-            context = self._browser_context()
-            if context is not None:
-                with _sessions_lock:
-                    if _sessions.get(context) is self:
-                        del _sessions[context]
-                    _facades.pop(self, None)
+            _registry.discard(self._browser_context(), self)
             if self._engine is not None:
                 self._engine.close_session(self._id)
