@@ -8,6 +8,7 @@ from ._errors import (
     PatchConflictError, StaleWindowError, UnsupportedPlatformError,
 )
 from ._patch import install, uninstall
+from ._platform import os_language
 from ._runtime import configure
 from ._sync import Alert, App, DesktopContext, Window
 
@@ -15,8 +16,8 @@ install()
 
 __all__ = [
     "Alert", "App", "DesktopContext", "Window",
-    "configure", "install", "uninstall", "DesktopError", "DesktopTimeoutError", "PatchConflictError",
-    "DesktopConfigurationError", "BridgeUnavailableError", "AmbiguousMatchError",
+    "configure", "install", "os_language", "uninstall", "DesktopError", "DesktopTimeoutError",
+    "PatchConflictError", "DesktopConfigurationError", "BridgeUnavailableError", "AmbiguousMatchError",
     "StaleWindowError", "DesktopActionError", "DesktopBusyError", "DesktopClosedError",
     "UnsupportedPlatformError",
 ]

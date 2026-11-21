@@ -235,7 +235,7 @@ class ApiTests(unittest.TestCase):
                     pass
 
         request.assert_called_once_with(
-            "prepare", title="Información del equipo", pid=None, title_prefix="", has_text="", timeout=50
+            "prepare", title="Información del equipo", pid=None, title_prefix="", has_text="", only_new=False, timeout=50
         )
         cancel.assert_called_once_with(7)
 
@@ -253,6 +253,40 @@ class ApiTests(unittest.TestCase):
                 with expect_app(predicate=lambda app: app.title == "Esperada") as opened:
                     pass
         self.assertEqual(opened.context.apps, ())
+
+    def test_os_language_returns_bcp47_and_is_exposed_on_desktop_context(self):
+        page = FakePage()
+        session = _runtime.session_for_context(page.context)
+        self.addCleanup(session.close_nowait)
+        dcontext = DesktopContext(session)
+
+        lang = playwright_desktop.os_language()
+        self.assertIsInstance(lang, str)
+        self.assertTrue(len(lang) >= 2)
+        self.assertEqual(dcontext.os_language, lang)
+
+        with (
+            patch.object(_platform.sys, "platform", "linux"),
+            patch.object(_platform.locale, "getlocale", return_value=("en_US", "UTF-8")),
+        ):
+            self.assertEqual(playwright_desktop.os_language(), "en-US")
+            self.assertEqual(dcontext.os_language, "en-US")
+
+    def test_app_only_new_validation_and_forwarding(self):
+        with self.assertRaisesRegex(ValueError, "only_new"):
+            WindowQuery(title="Aviso", only_new="yes")
+
+        page = FakePage()
+        session = _runtime.session_for_context(page.context)
+        self.addCleanup(session.close_nowait)
+        dcontext = DesktopContext(session)
+        with patch.object(session, "call", return_value=SimpleNamespace(handle=8)) as request:
+            dcontext.app(has_text="Windows protegió su PC", only_new=True).get_by_role("link", name="Más información").click()
+        self.assertTrue(request.call_args.kwargs["only_new"])
+
+        with patch.object(session, "call", return_value=SimpleNamespace(handle=9)) as default_request:
+            dcontext.app(title="Edge", pid=42).get_by_role("button", name="Abrir").click()
+        self.assertFalse(default_request.call_args.kwargs["only_new"])
 
 
 if __name__ == "__main__":

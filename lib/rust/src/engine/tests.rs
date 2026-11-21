@@ -16,6 +16,10 @@ impl Platform for FakePlatform {
     type WindowKey = u32;
     type Provider = &'static str;
 
+    fn snapshot_windows(&self) -> Result<HashSet<Self::WindowKey>> {
+        Ok(self.windows.iter().map(|window| self.window_key(window)).collect())
+    }
+
     fn candidates(&self, query: &WindowQuery) -> Result<Vec<Self::Window>> {
         Ok(self.windows.iter().copied()
             .filter(|(id, name)| query.matches(name, *id))
@@ -23,17 +27,25 @@ impl Platform for FakePlatform {
     }
 
     fn find_candidates(
-        &mut self, _request: Arc<RequestState>, query: &WindowQuery,
+        &mut self, _request: Arc<RequestState>, query: &WindowQuery, exclude: &HashSet<Self::WindowKey>,
     ) -> Result<CandidateSearch<Self::Window>> {
-        if query.has_text.is_empty() {
-            return self.candidates(query).map(CandidateSearch::Ready);
+        let filtered: Vec<_> = self.candidates(query)?
+            .into_iter()
+            .filter(|window| !exclude.contains(&self.window_key(window)))
+            .collect();
+        if query.has_text.is_empty() || filtered.is_empty() {
+            return Ok(CandidateSearch::Ready(filtered));
         }
         if let Some(windows) = self.pending_windows.clone() {
+            let pending_filtered: Vec<_> = windows
+                .into_iter()
+                .filter(|window| !exclude.contains(&self.window_key(window)))
+                .collect();
             let (sender, receiver) = mpsc::channel();
-            sender.send(Ok(windows)).unwrap();
+            sender.send(Ok(pending_filtered)).unwrap();
             return Ok(CandidateSearch::Pending(receiver));
         }
-        self.candidates(query).map(CandidateSearch::Ready)
+        Ok(CandidateSearch::Ready(filtered))
     }
 
     fn window_key(&self, window: &Self::Window) -> Self::WindowKey {
@@ -475,4 +487,74 @@ fn bring_to_front_and_close_window_coordinate_lifecycle_without_duplicate_close_
         window_id: 99999, ..Arguments::default()
     });
     assert_eq!(worker.step(&mut unknown_close).unwrap_err().code, "STALE");
+}
+
+#[test]
+fn only_new_ignores_windows_present_when_session_baseline_was_recorded() {
+    let mut worker = test_worker();
+    let owner = session(1);
+    worker.shared.sessions.lock().unwrap().insert(owner.id, owner.clone());
+    let deadline = Instant::now() + Duration::from_secs(10);
+
+    // Ventana vieja previa a iniciar la sesión desktop.
+    worker.platform.windows.push((1, "Aviso"));
+
+    let (mut prep, _) = command(request(owner.clone(), deadline), Operation::PrepareCapture, Arguments {
+        window: WindowQuery { title: "Destino".into(), ..WindowQuery::default() }, ..Arguments::default()
+    });
+    assert!(worker.step(&mut prep).unwrap().is_some());
+
+    // Aparece una nueva ventana con el mismo título después del baseline.
+    worker.platform.windows.push((2, "Aviso"));
+
+    // Con only_new=true descarta la ventana (1, "Aviso") del baseline y opera sobre (2, "Aviso").
+    let (mut click_new, _) = command(request(owner.clone(), deadline), Operation::Window(WindowOperation::Click), Arguments {
+        window: WindowQuery { title: "Aviso".into(), only_new: true, ..WindowQuery::default() },
+        control: ControlQuery { name: "Aceptar".into(), ..ControlQuery::default() },
+        ..Arguments::default()
+    });
+    assert!(worker.step(&mut click_new).unwrap().is_none());
+    assert!(worker.step(&mut click_new).unwrap().is_none());
+    let reply = worker.step(&mut click_new).unwrap().unwrap();
+    assert_eq!(reply.pid, Some(2));
+    assert_eq!(worker.platform.actions, 1);
+
+    // Con only_new=false ambas ventanas coinciden y produce AMBIGUOUS.
+    let (mut click_all, _) = command(request(owner.clone(), deadline), Operation::Window(WindowOperation::Click), Arguments {
+        window: WindowQuery { title: "Aviso".into(), only_new: false, ..WindowQuery::default() },
+        control: ControlQuery { name: "Aceptar".into(), ..ControlQuery::default() },
+        ..Arguments::default()
+    });
+    assert_eq!(worker.step(&mut click_all).unwrap_err().code, "AMBIGUOUS");
+
+    Engine { shared: worker.shared.clone() }.close_session(owner.id);
+    worker.cleanup();
+    assert!(!worker.baselines.contains_key(&owner.id));
+}
+
+#[test]
+fn complete_capture_supports_has_text_and_excludes_before_windows() {
+    let mut worker = test_worker();
+    let owner = session(1);
+    worker.shared.sessions.lock().unwrap().insert(owner.id, owner.clone());
+    let deadline = Instant::now() + Duration::from_secs(10);
+
+    // Ventana sin título ya abierta antes de PrepareCapture.
+    worker.platform.windows.push((1, ""));
+    let query = WindowQuery { has_text: "Windows protegió su PC".into(), ..WindowQuery::default() };
+    let (mut prep, _) = command(request(owner.clone(), deadline), Operation::PrepareCapture, Arguments {
+        window: query, ..Arguments::default()
+    });
+    let capture_id = worker.step(&mut prep).unwrap().unwrap().handle;
+
+    // Aparece una segunda ventana sin título (2, "") y find_candidates (Pending) reporta ambas.
+    worker.platform.windows.push((2, ""));
+    worker.platform.pending_windows = Some(vec![(1, ""), (2, "")]);
+
+    let (mut capture, _) = command(request(owner, deadline), Operation::CompleteCapture, Arguments {
+        capture_id, ..Arguments::default()
+    });
+    assert!(worker.step(&mut capture).unwrap().is_none());
+    let reply = worker.step(&mut capture).unwrap().unwrap();
+    assert_eq!(reply.pid, Some(2));
 }

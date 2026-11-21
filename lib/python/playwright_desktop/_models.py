@@ -28,9 +28,12 @@ class WindowQuery:
     pid: int | None = None
     title_prefix: str | None = None
     has_text: str | None = None
+    only_new: bool = False
     allow_empty: bool = field(default=False, repr=False, compare=False)
 
     def __post_init__(self):
+        if not isinstance(self.only_new, bool):
+            raise ValueError("only_new must be a boolean.")
         if self.pid is not None and (
             isinstance(self.pid, bool) or not isinstance(self.pid, int) or not 0 < self.pid <= MAX_PROCESS_ID
         ):
@@ -68,6 +71,7 @@ def query_parameters(query: WindowQuery) -> dict[str, Any]:
         "pid": query.pid,
         "title_prefix": query.title_prefix or "",
         "has_text": query.has_text or "",
+        "only_new": query.only_new,
     }
 
 

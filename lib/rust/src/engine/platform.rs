@@ -32,6 +32,7 @@ pub(super) struct WindowQuery {
     pub(super) pid: Option<u32>,
     pub(super) title_prefix: String,
     pub(super) has_text: String,
+    pub(super) only_new: bool,
 }
 
 impl WindowQuery {
@@ -93,11 +94,20 @@ pub(super) trait Platform {
     type WindowKey: Clone + Eq + Hash;
     type Provider: Copy;
 
+    fn snapshot_windows(&self) -> Result<HashSet<Self::WindowKey>>;
     fn candidates(&self, query: &WindowQuery) -> Result<Vec<Self::Window>>;
     fn find_candidates(
-        &mut self, _request: Arc<RequestState>, query: &WindowQuery,
+        &mut self,
+        _request: Arc<RequestState>,
+        query: &WindowQuery,
+        exclude: &HashSet<Self::WindowKey>,
     ) -> Result<CandidateSearch<Self::Window>> {
-        self.candidates(query).map(CandidateSearch::Ready)
+        Ok(CandidateSearch::Ready(
+            self.candidates(query)?
+                .into_iter()
+                .filter(|window| !exclude.contains(&self.window_key(window)))
+                .collect(),
+        ))
     }
     fn window_key(&self, window: &Self::Window) -> Self::WindowKey;
     fn window_metadata(&self, window: &Self::Window) -> (u32, String);

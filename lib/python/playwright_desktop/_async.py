@@ -30,8 +30,9 @@ class DesktopContext(_DesktopContextBase):
         pid: int | None = None,
         title_prefix: str | None = None,
         has_text: str | None = None,
+        only_new: bool = False,
     ) -> App:
-        return App(self._session, self, WindowQuery(title, pid, title_prefix, has_text))
+        return App(self._session, self, WindowQuery(title, pid, title_prefix, has_text, only_new=only_new))
 
     def expect_app(
         self,

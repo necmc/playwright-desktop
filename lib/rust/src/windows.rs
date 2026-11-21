@@ -1,5 +1,5 @@
 use crate::error::{Failure, Result};
-use ::windows::Win32::Foundation::{CloseHandle, HWND, LPARAM, WPARAM};
+use ::windows::Win32::Foundation::{CloseHandle, HWND, LPARAM, NO_ERROR, SetLastError, WPARAM};
 use ::windows::Win32::System::Threading::{
     OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
 };
@@ -120,9 +120,15 @@ unsafe extern "system" fn collect(handle: HWND, parameter: LPARAM) -> BOOL {
 
 pub fn list_for_query(include_untitled: bool) -> Result<Vec<Window>> {
     let mut state = CollectState { values: Vec::new(), include_untitled };
+    // EnumWindows returns FALSE with NO_ERROR when the desktop has zero windows.
+    // Clear any stale Win32 error in TLS first so empty desktops are not misreported.
+    unsafe { SetLastError(NO_ERROR) };
     // SAFETY: collect only uses CollectState while this synchronous enumeration is active.
-    unsafe { EnumWindows(Some(collect), LPARAM(&mut state as *mut _ as isize)) }
-        .map_err(|e| Failure::new("ACTION", format!("Cannot enumerate Windows windows: {e}")))?;
+    if let Err(error) = unsafe { EnumWindows(Some(collect), LPARAM(&mut state as *mut _ as isize)) } {
+        if error.code().0 != 0 {
+            return Err(Failure::new("ACTION", format!("Cannot enumerate Windows windows: {error}")));
+        }
+    }
     Ok(state.values)
 }
 

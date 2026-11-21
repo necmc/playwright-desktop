@@ -167,6 +167,13 @@ impl Platform for WindowsPlatform {
     type WindowKey = (isize, u32);
     type Provider = WindowsProvider;
 
+    fn snapshot_windows(&self) -> Result<HashSet<Self::WindowKey>> {
+        Ok(windows::list_for_query(true)?
+            .into_iter()
+            .map(|window| self.window_key(&window))
+            .collect())
+    }
+
     fn candidates(&self, query: &WindowQuery) -> Result<Vec<Self::Window>> {
         Ok(windows::list_for_query(query.allows_untitled())?.into_iter()
             .filter(|window| query.matches(&window.title, window.pid))
@@ -174,9 +181,12 @@ impl Platform for WindowsPlatform {
     }
 
     fn find_candidates(
-        &mut self, request: Arc<RequestState>, query: &WindowQuery,
+        &mut self, request: Arc<RequestState>, query: &WindowQuery, exclude: &HashSet<Self::WindowKey>,
     ) -> Result<CandidateSearch<Self::Window>> {
-        let candidates = self.candidates(query)?;
+        let candidates: Vec<Self::Window> = self.candidates(query)?
+            .into_iter()
+            .filter(|window| !exclude.contains(&self.window_key(window)))
+            .collect();
         if query.has_text.is_empty() || candidates.is_empty() {
             return Ok(CandidateSearch::Ready(candidates));
         }

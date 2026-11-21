@@ -7,6 +7,7 @@ import weakref
 
 from ._errors import DesktopError
 from ._models import WindowQuery
+from ._platform import os_language
 
 
 class _DesktopContextBase:
@@ -19,6 +20,10 @@ class _DesktopContextBase:
     @property
     def browser_context(self):
         return self._session.browser_context
+
+    @property
+    def os_language(self) -> str:
+        return os_language()
 
     @property
     def apps(self) -> tuple[Any, ...]:

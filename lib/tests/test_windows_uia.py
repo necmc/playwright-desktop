@@ -46,10 +46,11 @@ class WindowsUiaTests(unittest.TestCase):
     def tearDown(self):
         _runtime.reset_defaults()
 
-    def start_window(self, executable):
-        process = subprocess.Popen([executable, self.title, self.results])
+    def start_window(self, executable, results=None):
+        target_results = self.results if results is None else results
+        process = subprocess.Popen([executable, self.title, target_results])
         self.addCleanup(self.stop, process)
-        self.wait_for_result("ready")
+        self.wait_for_result("ready", results=target_results)
         return process.pid
 
     @staticmethod
@@ -58,13 +59,33 @@ class WindowsUiaTests(unittest.TestCase):
             process.terminate()
         process.wait(timeout=5)
 
-    def wait_for_result(self, value):
+    def wait_for_result(self, value, results=None):
+        target_results = self.results if results is None else results
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline:
-            if self.results.exists() and value in self.results.read_text().splitlines():
+            if target_results.exists() and value in target_results.read_text().splitlines():
                 return
             time.sleep(0.02)
         self.fail(f"The Windows fixture did not report {value!r}.")
+
+    def test_only_new_ignores_window_already_open_before_desktop_context_started(self):
+        stale_results = self.directory / f"{uuid4().hex}-stale.txt"
+        pid1 = self.start_window(self.application, results=stale_results)
+        with patch.dict(os.environ), sync_playwright() as playwright:
+            os.environ.pop("JAVA_HOME", None)
+            with playwright.chromium.launch(channel="msedge") as browser:
+                page = browser.new_page()
+                with page.expect_app(title=self.title) as opened:
+                    pid2 = self.start_window(self.application)
+                    app2 = opened.context.app(title=self.title, only_new=True)
+                    app2.get_by_role("button", name="Mostrar aviso").click()
+                    self.wait_for_result("notice")
+                captured = opened.value
+                self.assertEqual(captured.pid, pid2)
+                self.assertNotEqual(captured.pid, pid1)
+                self.assertNotIn("notice", stale_results.read_text().splitlines())
+                captured.close()
+                self.assertFalse(page.context.is_closed())
 
     def test_sync_click_opens_and_closes_a_new_dialog_without_java(self):
         with patch.dict(os.environ), sync_playwright() as playwright:
