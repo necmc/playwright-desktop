@@ -24,8 +24,12 @@ try {
     $rustFlags = if ($previousRustFlags) { $previousRustFlags -split [char]31 } else { $env:RUSTFLAGS -split '\s+' | Where-Object { $_ } }
     $rustFlags = @($rustFlags) + "--remap-path-prefix=$PWD=/src" + "--remap-path-prefix=$cargoHome=/cargo"
     $env:CARGO_ENCODED_RUSTFLAGS = $rustFlags -join [char]31
-    py -B -m maturin build --release --locked --target-dir rust/target/python --out dist/python
+    $pythonCmd = Get-Command python -ErrorAction SilentlyContinue
+    $python = if ($pythonCmd -and $pythonCmd.Source -notlike '*\WindowsApps\python.exe') { $pythonCmd.Source } else { 'py' }
+    & $python -B -m maturin build --release --locked --target-dir rust/target/python --out dist/python
     if ($LASTEXITCODE -ne 0) { throw 'Falló la compilación del paquete Python.' }
+    & $python -B -m maturin sdist --manifest-path rust/Cargo.toml --out dist/python
+    if ($LASTEXITCODE -ne 0) { throw 'Falló la generación del paquete fuente (.tar.gz).' }
 }
 finally {
     $env:PATH = $previousPath

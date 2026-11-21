@@ -97,7 +97,7 @@ La compilación requiere Python, Maturin, Rust MSVC y las herramientas C++ de Vi
 .\lib\scripts\build_py.ps1
 ```
 
-El script limpia `lib/rust/target/python/` y `lib/dist/python/` antes de ejecutar `maturin build`. Si la limpieza falla, la compilación se detiene. El wheel queda en `lib/dist/python/` e incluye `playwright_desktop` y sus metadatos. `lib/README.md` aporta la descripción del paquete.
+El script limpia `lib/rust/target/python/` y `lib/dist/python/` antes de ejecutar `maturin`. Si la limpieza falla, la compilación se detiene. El wheel y el paquete fuente (`.tar.gz`) quedan en `lib/dist/python/` e incluyen `playwright_desktop` y sus metadatos. `lib/README.md` aporta la descripción del paquete.
 
 La compilación aplica el remapeo de rutas de Rust y Maturin elimina los símbolos de depuración. El SBOM automático de Rust está desactivado para evitar que el wheel incluya rutas de construcción. [Remapeo de rutas de Rust](https://doc.rust-lang.org/rustc/remap-source-paths.html).
 
@@ -112,16 +112,6 @@ Las pruebas internas de Python se ejecutan con `unittest`.
 ```powershell
 py -m unittest discover -s lib/tests -v
 ```
-
-### Publicación en PyPI
-
-El script de publicación requiere Twine y usa variables de entorno para autenticar la subida.
-
-```powershell
-.\lib\scripts\publish_py.ps1
-```
-
-El script llama a `build_py.ps1`, sube el wheel con `twine upload` y restaura las variables de autenticación al terminar. `-WhatIf` muestra la acción prevista.
 
 ### Herramientas del agente
 

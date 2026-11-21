@@ -1,0 +1,106 @@
+name: Publicar en PyPI
+
+on:
+  push:
+    tags:
+      - "v[0-9]*.[0-9]*.[0-9]*"
+      - "[0-9]*.[0-9]*.[0-9]*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-pypi-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Compilar, probar, publicar en PyPI y crear Release (Windows)
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+
+    steps:
+      - name: Descargar repositorio
+        uses: actions/checkout@v4
+
+      - name: Validar etiqueta SemVer y versión del paquete
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          $semverRegex = '^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*)?(?:\+[0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*)?$'
+          if ($tag -cnotmatch $semverRegex) {
+            throw "La etiqueta '$tag' no cumple el formato SemVer (ej. v0.1.0 o 0.1.0)."
+          }
+          $tagVersion = $tag -replace '^v', ''
+
+          $pyproject = Get-Content -Raw 'lib/pyproject.toml'
+          $cargo = Get-Content -Raw 'lib/rust/Cargo.toml'
+          $initPy = Get-Content -Raw 'lib/python/playwright_desktop/__init__.py'
+
+          $pyVersion = if ($pyproject -match '(?m)^version\s*=\s*"([^"]+)"') { $Matches[1] } else { '' }
+          $cargoVersion = if ($cargo -match '(?m)^version\s*=\s*"([^"]+)"') { $Matches[1] } else { '' }
+          $initVersion = if ($initPy -match '(?m)^__version__\s*=\s*"([^"]+)"') { $Matches[1] } else { '' }
+
+          if ($pyVersion -ne $tagVersion -or $cargoVersion -ne $tagVersion -or $initVersion -ne $tagVersion) {
+            throw "Las versiones no coinciden con la etiqueta '$tagVersion': lib/pyproject.toml='$pyVersion', lib/rust/Cargo.toml='$cargoVersion', __init__.py='$initVersion'."
+          }
+          Write-Host "Versión SemVer verificada: $tagVersion"
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Configurar toolchain de Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Caché de compilación Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: lib/rust
+
+      - name: Instalar dependencias de compilación y publicación
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install "maturin>=1.16,<2" twine "playwright>=1.63,<1.66"
+
+      - name: Ejecutar pruebas de Rust
+        run: cargo test --manifest-path lib/rust/Cargo.toml --locked
+
+      - name: Compilar wheel y sdist
+        run: .\lib\scripts\build_py.ps1
+
+      - name: Probar wheel en Python
+        run: |
+          $tmp = Join-Path $env:RUNNER_TEMP ("pw-desk-test-" + [guid]::NewGuid().ToString('N'))
+          try {
+            New-Item -ItemType Directory -Path $tmp | Out-Null
+            $whl = (Get-ChildItem 'lib/dist/python/*.whl' | Select-Object -First 1).FullName
+            python -m pip install --no-deps --quiet --target $tmp $whl
+            if ($LASTEXITCODE -ne 0) { throw "Falló la instalación del wheel." }
+            $env:PYTHONPATH = "$tmp;lib/tests"
+            python -B -m unittest discover -s lib/tests -v
+            if ($LASTEXITCODE -ne 0) { throw "Fallaron las pruebas de Python." }
+          }
+          finally {
+            Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
+          }
+
+      - name: Publicar en PyPI
+        env:
+          PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
+        run: .\lib\scripts\publish_py.ps1 -SkipBuild
+
+      - name: Crear GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          $assets = @(Get-ChildItem -Path 'lib/dist/python/*.whl', 'lib/dist/python/*.tar.gz' | ForEach-Object { $_.FullName })
+          $ghArgs = @('release', 'create', $tag) + $assets + @('--title', $tag, '--generate-notes')
+          if (($tag -replace '\+.*$', '') -match '-') {
+            $ghArgs += '--prerelease'
+          }
+          gh @ghArgs
+          if ($LASTEXITCODE -ne 0) { throw "Falló la creación del GitHub Release." }
