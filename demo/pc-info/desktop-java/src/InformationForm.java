@@ -1,6 +1,5 @@
 import java.awt.BorderLayout;
 import java.awt.Color;
-import java.awt.Component;
 import java.awt.Font;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
@@ -14,10 +13,11 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.time.LocalDate;
 import java.time.format.DateTimeParseException;
-import java.time.Duration;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutionException;
 import javax.swing.BorderFactory;
@@ -33,15 +33,45 @@ import javax.swing.UIManager;
 
 /** Formulario de escritorio de la demo. Compatible con OpenJDK 11. */
 public final class InformationForm {
+    private static final String WINDOW_TITLE = "Información del equipo";
+    private static final String DATE_LABEL = "Fecha";
+    private static final String COMPUTER_NAME_LABEL = "Nombre del equipo";
+    private static final String ALIAS_LABEL = "Alias";
+    private static final String CONFIRM_LABEL = "Confirmar";
+    private static final String DEFAULT_ALIAS = "Usuario demo";
+    private static final String INITIAL_STATUS = "Revisa o edita los datos antes de confirmar.";
+    private static final String FIELD_DATE = "date";
+    private static final String FIELD_COMPUTER_NAME = "computerName";
+    private static final String FIELD_ALIAS = "alias";
+    private static final String CONFIRM_CONTROL_NAME = "confirm";
+    private static final String RESULT_PATH_SUFFIX = "/result";
+    private static final String CANCEL_PATH_SUFFIX = "/cancel";
+    private static final String COMPUTER_NAME_ENV = "COMPUTERNAME";
+    private static final String DEFAULT_COMPUTER_NAME = "Equipo local";
+    private static final String ALLOWED_SCHEME = "http";
+    private static final List<String> ALLOWED_HOSTS = List.of("127.0.0.1", "localhost");
+    private static final String OPERATION_PATH_REGEX = "/api/operations/[A-Za-z0-9_-]{20,64}";
+    private static final String FORM_CONTENT_TYPE = "application/x-www-form-urlencoded; charset=UTF-8";
+    private static final String ERROR_DIALOG_TITLE = "No se pudo abrir la demo";
+
+    private static final int FIELD_COLUMNS = 26;
+    private static final int MIN_TEXT_LENGTH = 1;
+    private static final int MAX_TEXT_LENGTH = 100;
+    private static final int TITLE_FONT_SIZE = 21;
+    private static final float STATUS_FONT_SIZE = 12f;
+    private static final Color STATUS_COLOR = new Color(80, 95, 115);
+    private static final Duration CONNECT_TIMEOUT = Duration.ofSeconds(5);
+    private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(20);
+
     private final URI operation;
     private final HttpClient client = HttpClient.newBuilder()
-            .connectTimeout(Duration.ofSeconds(5)).build();
-    private final JFrame window = new JFrame("Información del equipo");
-    private final JTextField dateField = new JTextField(LocalDate.now().toString(), 26);
-    private final JTextField computerField = new JTextField(computerName(), 26);
-    private final JTextField aliasField = new JTextField("Usuario demo", 26);
-    private final JButton confirmButton = new JButton("Confirmar");
-    private final JLabel status = new JLabel("Revisa o edita los datos antes de confirmar.");
+            .connectTimeout(CONNECT_TIMEOUT).build();
+    private final JFrame window = new JFrame(WINDOW_TITLE);
+    private final JTextField dateField = new JTextField(LocalDate.now().toString(), FIELD_COLUMNS);
+    private final JTextField computerField = new JTextField(computerName(), FIELD_COLUMNS);
+    private final JTextField aliasField = new JTextField(DEFAULT_ALIAS, FIELD_COLUMNS);
+    private final JButton confirmButton = new JButton(CONFIRM_LABEL);
+    private final JLabel status = new JLabel(INITIAL_STATUS);
     private boolean sending = false;
 
     private InformationForm(URI operation) {
@@ -49,22 +79,22 @@ public final class InformationForm {
         window.setDefaultCloseOperation(JFrame.DO_NOTHING_ON_CLOSE);
         JPanel content = new JPanel(new BorderLayout(0, 22));
         content.setBorder(BorderFactory.createEmptyBorder(26, 28, 24, 28));
-        JLabel title = new JLabel("Información del equipo");
-        title.setFont(title.getFont().deriveFont(Font.BOLD, 21));
+        JLabel title = new JLabel(WINDOW_TITLE);
+        title.setFont(title.getFont().deriveFont(Font.BOLD, TITLE_FONT_SIZE));
         content.add(title, BorderLayout.NORTH);
 
         JPanel fields = new JPanel(new GridBagLayout());
-        addField(fields, "Fecha", dateField, "date", 0, 'F');
-        addField(fields, "Nombre del equipo", computerField, "computerName", 1, 'N');
-        addField(fields, "Alias", aliasField, "alias", 2, 'A');
+        addField(fields, DATE_LABEL, dateField, FIELD_DATE, 0, 'F');
+        addField(fields, COMPUTER_NAME_LABEL, computerField, FIELD_COMPUTER_NAME, 1, 'N');
+        addField(fields, ALIAS_LABEL, aliasField, FIELD_ALIAS, 2, 'A');
         content.add(fields, BorderLayout.CENTER);
 
         JPanel footer = new JPanel(new BorderLayout(0, 16));
-        status.setFont(status.getFont().deriveFont(12f));
-        status.setForeground(new Color(80, 95, 115));
+        status.setFont(status.getFont().deriveFont(STATUS_FONT_SIZE));
+        status.setForeground(STATUS_COLOR);
         footer.add(status, BorderLayout.NORTH);
-        confirmButton.setName("confirm");
-        confirmButton.getAccessibleContext().setAccessibleName("Confirmar");
+        confirmButton.setName(CONFIRM_CONTROL_NAME);
+        confirmButton.getAccessibleContext().setAccessibleName(CONFIRM_LABEL);
         confirmButton.setMnemonic('C');
         confirmButton.addActionListener(event -> confirm());
         footer.add(confirmButton, BorderLayout.SOUTH);
@@ -104,12 +134,12 @@ public final class InformationForm {
     }
 
     private static String computerName() {
-        String name = System.getenv("COMPUTERNAME");
+        String name = System.getenv(COMPUTER_NAME_ENV);
         if (name != null && !name.isBlank()) return name;
         try {
             return InetAddress.getLocalHost().getHostName();
         } catch (Exception error) {
-            return "Equipo local";
+            return DEFAULT_COMPUTER_NAME;
         }
     }
 
@@ -121,17 +151,18 @@ public final class InformationForm {
         } catch (DateTimeParseException error) {
             throw new IllegalArgumentException("La fecha debe ser válida y tener formato YYYY-MM-DD.");
         }
-        values.put("date", date);
-        values.put("computerName", textValue(computerField, "nombre del equipo"));
-        values.put("alias", textValue(aliasField, "alias"));
+        values.put(FIELD_DATE, date);
+        values.put(FIELD_COMPUTER_NAME, textValue(computerField, "nombre del equipo"));
+        values.put(FIELD_ALIAS, textValue(aliasField, "alias"));
         return values;
     }
 
     private static String textValue(JTextField field, String name) {
         String value = field.getText().strip();
         int count = value.codePointCount(0, value.length());
-        if (count < 1 || count > 100 || value.codePoints().anyMatch(Character::isISOControl)) {
-            throw new IllegalArgumentException("El " + name + " debe contener entre 1 y 100 caracteres visibles.");
+        if (count < MIN_TEXT_LENGTH || count > MAX_TEXT_LENGTH || value.codePoints().anyMatch(Character::isISOControl)) {
+            throw new IllegalArgumentException(
+                    "El " + name + " debe contener entre " + MIN_TEXT_LENGTH + " y " + MAX_TEXT_LENGTH + " caracteres visibles.");
         }
         return value;
     }
@@ -149,7 +180,7 @@ public final class InformationForm {
         new SwingWorker<Void, Void>() {
             @Override
             protected Void doInBackground() throws Exception {
-                post("/result", data);
+                post(RESULT_PATH_SUFFIX, data);
                 return null;
             }
 
@@ -176,7 +207,7 @@ public final class InformationForm {
         new SwingWorker<Void, Void>() {
             @Override
             protected Void doInBackground() throws Exception {
-                post("/cancel", Map.of());
+                post(CANCEL_PATH_SUFFIX, Map.of());
                 return null;
             }
 
@@ -215,8 +246,8 @@ public final class InformationForm {
             body.append(URLEncoder.encode(entry.getValue(), StandardCharsets.UTF_8));
         }
         HttpRequest request = HttpRequest.newBuilder(URI.create(operation.toString() + suffix))
-                .timeout(Duration.ofSeconds(20))
-                .header("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
+                .timeout(REQUEST_TIMEOUT)
+                .header("Content-Type", FORM_CONTENT_TYPE)
                 .POST(HttpRequest.BodyPublishers.ofString(body.toString(), StandardCharsets.UTF_8)).build();
         HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
         if (response.statusCode() / 100 != 2) {
@@ -229,17 +260,17 @@ public final class InformationForm {
         try {
             if (args.length != 1) throw new IllegalArgumentException("Abre la aplicación desde el botón Obtener información de la web.");
             URI operation = URI.create(args[0]);
-            if (!"http".equals(operation.getScheme())
-                    || !("127.0.0.1".equals(operation.getHost()) || "localhost".equals(operation.getHost()))
+            if (!ALLOWED_SCHEME.equals(operation.getScheme())
+                    || !ALLOWED_HOSTS.contains(operation.getHost())
                     || operation.getRawQuery() != null || operation.getRawFragment() != null
                     || operation.getUserInfo() != null
-                    || !operation.getPath().matches("/api/operations/[A-Za-z0-9_-]{20,64}")) {
+                    || !operation.getPath().matches(OPERATION_PATH_REGEX)) {
                 throw new IllegalArgumentException("La operación debe pertenecer al servidor local de la demo.");
             }
             UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
             SwingUtilities.invokeLater(() -> new InformationForm(operation));
         } catch (Exception error) {
-            JOptionPane.showMessageDialog(null, error.getMessage(), "No se pudo abrir la demo", JOptionPane.ERROR_MESSAGE);
+            JOptionPane.showMessageDialog(null, error.getMessage(), ERROR_DIALOG_TITLE, JOptionPane.ERROR_MESSAGE);
             System.exit(1);
         }
     }

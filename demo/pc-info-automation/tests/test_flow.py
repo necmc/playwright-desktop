@@ -2,7 +2,12 @@ from time import monotonic
 
 from playwright_desktop import DesktopTimeoutError
 
-from config import ACTIVATION_TIMEOUT_MS
+from config import (
+    ACTIVATION_TIMEOUT_MS,
+    DEFAULT_DESKTOP_TIMEOUT_MS,
+    POLL_INTERVAL_MS,
+    POST_TEST_PAUSE_MS,
+)
 from fixtures.demo import DemoTestCase
 from models.equipment_information import EquipmentInformation
 from pages.browser_clickonce import BrowserClickOnce
@@ -25,16 +30,16 @@ class PcInfoFlowTests(DemoTestCase):
         sscreen_visible = False
         try:
             with page.expect_app(
-                title=InformationForm.TITLE, timeout=ACTIVATION_TIMEOUT_MS
+                title="Información del equipo", timeout=ACTIVATION_TIMEOUT_MS
             ) as opened:
                 dcontext = opened.context
-                dcontext.set_default_timeout(15_000)
+                dcontext.set_default_timeout(DEFAULT_DESKTOP_TIMEOUT_MS)
                 browser = BrowserClickOnce(dcontext, page)
                 installer = ClickOnceInstaller(
-                    dcontext, application_name=InformationForm.TITLE, base_url=self.web.base_url,
+                    dcontext, application_name="Información del equipo", base_url=self.web.base_url,
                 )
                 sscreen = SScreenWarning(dcontext, page)
-                form_ready = dcontext.app(title=InformationForm.TITLE, only_new=True).get_by_role(
+                form_ready = dcontext.app(title="Información del equipo", only_new=True).get_by_role(
                     "button", name="Confirmar"
                 )
 
@@ -48,7 +53,7 @@ class PcInfoFlowTests(DemoTestCase):
                     if not sscreen_visible:
                         sscreen_visible = sscreen.confirm_if_present()
                     try:
-                        form_ready.wait_for(timeout=150)
+                        form_ready.wait_for(timeout=POLL_INTERVAL_MS)
                         break
                     except DesktopTimeoutError:
                         pass
@@ -71,4 +76,4 @@ class PcInfoFlowTests(DemoTestCase):
         for field, value in expected.as_payload().items():
             with self.subTest(pdf_field=field):
                 self.assertIn(value, pdf_text)
-        page.wait_for_timeout(5_000)
+        page.wait_for_timeout(POST_TEST_PAUSE_MS)

@@ -3,7 +3,12 @@
 from playwright.sync_api import Page
 from playwright_desktop import DesktopContext, DesktopTimeoutError
 
-MANIFEST = "InformationDemo.application"
+SPANISH_LANG_CHECK = "navigator.language.startsWith('es')"
+CDP_PROCESS_INFO_COMMAND = "SystemInfo.getProcessInfo"
+BROWSER_PROCESS_TYPE = "browser"
+TITLE_SEPARATOR = " - "
+OPEN_NOTICE_TIMEOUT_MS = 8000
+DOWNLOAD_LINK_TIMEOUT_MS = 1000
 
 
 class BrowserClickOnce:
@@ -13,8 +18,7 @@ class BrowserClickOnce:
 
     def click_open(self) -> None:
         browser_app = self._app()
-        spanish = self.page.evaluate("navigator.language.startsWith('es')")
-        if spanish:
+        if self.page.evaluate(SPANISH_LANG_CHECK):
             confirmation_title, open_button = "¿Quieres abrir este archivo?", "Abrir"
             open_link = "Abrir archivo"
         else:
@@ -22,28 +26,28 @@ class BrowserClickOnce:
             open_link = "Open file"
 
         notice = browser_app.get_by_role("pane", name=confirmation_title)
-        if self._click_if_visible(notice.get_by_role("button", name=open_button), timeout=8_000):
+        if self._click_if_visible(notice.get_by_role("button", name=open_button), timeout=OPEN_NOTICE_TIMEOUT_MS):
             print("ClickOnce: clic en Abrir del aviso del navegador.", flush=True)
             return
 
-        item = browser_app.get_by_role("listitem", name=MANIFEST)
+        item = browser_app.get_by_role("listitem", name="InformationDemo.application")
         link = item.get_by_role("link", name=open_link)
-        if self._click_if_visible(link, timeout=1_000):
+        if self._click_if_visible(link, timeout=DOWNLOAD_LINK_TIMEOUT_MS):
             print("ClickOnce: clic en Abrir archivo del aviso de descargas.", flush=True)
             return
 
-        raise AssertionError(f"El navegador no mostró un control de apertura para {MANIFEST} en el aviso.")
+        raise AssertionError("El navegador no mostró un control de apertura para InformationDemo.application en el aviso.")
 
     def _app(self):
         browser = self.page.context.browser
         protocol = browser.new_browser_cdp_session()
         try:
-            processes = protocol.send("SystemInfo.getProcessInfo")["processInfo"]
-            pid = next(process["id"] for process in processes if process["type"] == "browser")
+            processes = protocol.send(CDP_PROCESS_INFO_COMMAND)["processInfo"]
+            pid = next(process["id"] for process in processes if process["type"] == BROWSER_PROCESS_TYPE)
         finally:
             protocol.detach()
         # Chromium añade el nombre del navegador o del perfil tras este separador.
-        title_prefix = f"{self.page.title()} - "
+        title_prefix = f"{self.page.title()}{TITLE_SEPARATOR}"
         return self.dcontext.app(pid=pid, title_prefix=title_prefix)
 
     @staticmethod

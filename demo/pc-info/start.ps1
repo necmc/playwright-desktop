@@ -8,15 +8,24 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$baseUrl = "http://127.0.0.1:$Port"
-$webRoot = Join-Path $PSScriptRoot 'web'
-$buildScript = Join-Path $PSScriptRoot 'launcher-clickonce/build.ps1'
+$DefaultHost = '127.0.0.1'
+$MinPythonMajor = 3
+$MinPythonMinor = 10
+$YesConfirmationPattern = "^(s|si|s$([char]0x00ED)|y|yes)$"
+$WebRelativePath = 'web'
+$FlaskAppFile = 'app.py'
+$RequirementsFile = 'requirements.txt'
+$BuildScriptRelativePath = 'launcher-clickonce/build.ps1'
+
+$baseUrl = "http://${DefaultHost}:$Port"
+$webRoot = Join-Path $PSScriptRoot $WebRelativePath
+$buildScript = Join-Path $PSScriptRoot $BuildScriptRelativePath
 
 # Si el puerto está ocupado, preguntar antes de liberarlo o detener la ejecución.
 $owners = @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique)
 if ($owners.Count -gt 0) {
     $answer = Read-Host "El puerto $Port está ocupado (PID $($owners -join ', ')). ¿Deseas liberar el puerto? [s/N]"
-    if (([string]$answer).Trim() -notmatch "^(s|si|s$([char]0x00ED)|y|yes)$") {
+    if (([string]$answer).Trim() -notmatch $YesConfirmationPattern) {
         throw "No se puede utilizar el puerto $Port porque sigue ocupado."
     }
     try {
@@ -31,11 +40,11 @@ if ($owners.Count -gt 0) {
 if (-not (Get-Command $Python -ErrorAction SilentlyContinue)) {
     throw 'No se encontró Python. Instala Python 3.10+ o indica su ejecutable con -Python.'
 }
-& $Python -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)'
-if ($LASTEXITCODE -ne 0) { throw 'Se requiere Python 3.10 o superior.' }
+& $Python -c "import sys; sys.exit(0 if sys.version_info >= ($MinPythonMajor, $MinPythonMinor) else 1)"
+if ($LASTEXITCODE -ne 0) { throw "Se requiere Python $MinPythonMajor.$MinPythonMinor o superior." }
 
 Write-Host '[1/3] Preparando las dependencias de Python global...'
-& $Python -m pip install --user --disable-pip-version-check -r (Join-Path $webRoot 'requirements.txt')
+& $Python -m pip install --user --disable-pip-version-check -r (Join-Path $webRoot $RequirementsFile)
 if ($LASTEXITCODE -ne 0) { throw 'No se pudieron instalar las dependencias Python de la demo.' }
 
 Write-Host '[2/3] Compilando Java, el lanzador C# y la publicación ClickOnce...'
@@ -46,5 +55,5 @@ Write-Host 'Abre esta dirección en tu navegador y pulsa Obtener información.'
 Write-Host 'Mantén esta terminal abierta. Usa Ctrl+C para detener el servidor.'
 
 # Un único proceso de servidor en primer plano facilita detener la demo.
-& $Python -B -m flask --app (Join-Path $webRoot 'app.py') run --host 127.0.0.1 --port $Port --no-reload
+& $Python -B -m flask --app (Join-Path $webRoot $FlaskAppFile) run --host $DefaultHost --port $Port --no-reload
 if ($LASTEXITCODE -ne 0) { throw 'El servidor web terminó con un error.' }

@@ -2,6 +2,10 @@
 
 from dataclasses import dataclass
 
+FIELD_DATE = "date"
+FIELD_COMPUTER_NAME = "computerName"
+FIELD_ALIAS = "alias"
+
 
 @dataclass(frozen=True)
 class EquipmentInformation:
@@ -11,7 +15,7 @@ class EquipmentInformation:
 
     def as_payload(self) -> dict[str, str]:
         return {
-            "date": self.date,
-            "computerName": self.computer_name,
-            "alias": self.alias,
+            FIELD_DATE: self.date,
+            FIELD_COMPUTER_NAME: self.computer_name,
+            FIELD_ALIAS: self.alias,
         }

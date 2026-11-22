@@ -1,19 +1,27 @@
 $ErrorActionPreference = 'Stop'
-$libraryRoot = Join-Path $PSScriptRoot '../../lib'
+$LibraryRelativePath = '../../lib'
+$DistRelativePath = 'dist/python'
+$BuildScriptRelativePath = 'scripts/build_py.ps1'
+$WheelFilter = '*.whl'
+$TempPrefix = 'pc-info-wheel-'
+$ExtraPackages = @('pypdf')
+$RunnerScript = 'run.py'
 
-& (Join-Path $libraryRoot 'scripts/build_py.ps1')
-$wheels = @(Get-ChildItem -LiteralPath (Join-Path $libraryRoot 'dist/python') -Filter '*.whl' -File)
+$libraryRoot = Join-Path $PSScriptRoot $LibraryRelativePath
+
+& (Join-Path $libraryRoot $BuildScriptRelativePath)
+$wheels = @(Get-ChildItem -LiteralPath (Join-Path $libraryRoot $DistRelativePath) -Filter $WheelFilter -File)
 if ($wheels.Count -ne 1) { throw 'Se esperaba un wheel en lib/dist/python.' }
 
 $tempRoot = (Resolve-Path -LiteralPath $env:TEMP).Path
-$localInstall = Join-Path $tempRoot ('pc-info-wheel-' + [guid]::NewGuid().ToString('N'))
+$localInstall = Join-Path $tempRoot ($TempPrefix + [guid]::NewGuid().ToString('N'))
 $previousPythonPath = $env:PYTHONPATH
 try {
-    py -m pip install --target $localInstall $wheels[0].FullName pypdf
+    py -m pip install --target $localInstall $wheels[0].FullName @ExtraPackages
     if ($LASTEXITCODE -ne 0) { throw 'No se pudo instalar el wheel local.' }
 
     $env:PYTHONPATH = $localInstall
-    py (Join-Path $PSScriptRoot 'run.py')
+    py (Join-Path $PSScriptRoot $RunnerScript)
     exit $LASTEXITCODE
 }
 finally {

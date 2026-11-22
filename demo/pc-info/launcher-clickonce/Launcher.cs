@@ -11,6 +11,24 @@ using System.Windows.Forms;
 
 internal static class Launcher
 {
+    private const string OperationQueryKey = "operation";
+    private const string AllowedScheme = "http";
+    private const string LoopbackHost = "127.0.0.1";
+    private const string LocalhostName = "localhost";
+    private const string OperationPathRegex = "^/api/operations/[A-Za-z0-9_-]{20,64}$";
+    private const string JavaHomeSettingKey = "JavaHome";
+    private const string JavaBinDirectory = "bin";
+    private const string JavaExecutableName = "javaw.exe";
+    private const string JarFileName = "InformationForm.jar";
+    private const string BridgeOptions =
+        "-Djavax.accessibility.assistive_technologies=com.sun.java.accessibility.AccessBridge " +
+        "-Djavax.accessibility.screen_magnifier_present=true ";
+    private const string ErrorEndpointSuffix = "/error";
+    private const string ErrorFormKey = "message=";
+    private const string FormContentType = "application/x-www-form-urlencoded; charset=UTF-8";
+    private const int ErrorReportTimeoutMs = 5000;
+    private const string ErrorDialogTitle = "No se pudo abrir la demo";
+
     [STAThread]
     private static int Main(string[] args)
     {
@@ -22,7 +40,7 @@ internal static class Launcher
             {
                 var activation = ApplicationDeployment.CurrentDeployment.ActivationUri;
                 if (activation == null) throw new InvalidOperationException("ClickOnce no proporcionó la dirección de activación.");
-                address = HttpUtility.ParseQueryString(activation.Query)["operation"];
+                address = HttpUtility.ParseQueryString(activation.Query)[OperationQueryKey];
             }
             else
             {
@@ -30,27 +48,24 @@ internal static class Launcher
             }
             Uri candidate;
             if (!Uri.TryCreate(address, UriKind.Absolute, out candidate)
-                || candidate.Scheme != "http"
-                || !(candidate.Host == "127.0.0.1" || candidate.Host == "localhost")
+                || candidate.Scheme != AllowedScheme
+                || !(candidate.Host == LoopbackHost || candidate.Host == LocalhostName)
                 || candidate.UserInfo.Length != 0 || candidate.Query.Length != 0 || candidate.Fragment.Length != 0
-                || !Regex.IsMatch(candidate.AbsolutePath, "^/api/operations/[A-Za-z0-9_-]{20,64}$"))
+                || !Regex.IsMatch(candidate.AbsolutePath, OperationPathRegex))
             {
                 throw new InvalidOperationException("Abre esta aplicación desde Obtener información en la web local.");
             }
             operation = candidate;
             var directory = AppDomain.CurrentDomain.BaseDirectory;
-            var javaHome = ConfigurationManager.AppSettings["JavaHome"];
-            var java = Path.Combine(javaHome ?? "", "bin", "javaw.exe");
-            var jar = Path.Combine(directory, "InformationForm.jar");
+            var javaHome = ConfigurationManager.AppSettings[JavaHomeSettingKey];
+            var java = Path.Combine(javaHome ?? "", JavaBinDirectory, JavaExecutableName);
+            var jar = Path.Combine(directory, JarFileName);
             if (!File.Exists(java)) throw new FileNotFoundException("No se encontró Java. Vuelve a compilar indicando -JavaHome con la carpeta de OpenJDK.");
             if (!File.Exists(jar)) throw new FileNotFoundException("La publicación no contiene InformationForm.jar.");
-            const string bridgeOptions =
-                "-Djavax.accessibility.assistive_technologies=com.sun.java.accessibility.AccessBridge " +
-                "-Djavax.accessibility.screen_magnifier_present=true ";
             var start = new ProcessStartInfo
             {
                 FileName = java,
-                Arguments = bridgeOptions + "-jar \"" + jar + "\" \"" + operation.AbsoluteUri + "\"",
+                Arguments = BridgeOptions + "-jar \"" + jar + "\" \"" + operation.AbsoluteUri + "\"",
                 WorkingDirectory = directory,
                 UseShellExecute = false
             };
@@ -65,7 +80,7 @@ internal static class Launcher
         catch (Exception error)
         {
             if (operation != null) ReportError(operation, error.Message);
-            MessageBox.Show(error.Message, "No se pudo abrir la demo", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            MessageBox.Show(error.Message, ErrorDialogTitle, MessageBoxButtons.OK, MessageBoxIcon.Error);
             return 1;
         }
     }
@@ -74,11 +89,11 @@ internal static class Launcher
     {
         try
         {
-            var request = (HttpWebRequest)WebRequest.Create(operation.AbsoluteUri + "/error");
+            var request = (HttpWebRequest)WebRequest.Create(operation.AbsoluteUri + ErrorEndpointSuffix);
             request.Method = "POST";
-            request.ContentType = "application/x-www-form-urlencoded; charset=UTF-8";
-            request.Timeout = 5000;
-            var body = Encoding.UTF8.GetBytes("message=" + HttpUtility.UrlEncode(message));
+            request.ContentType = FormContentType;
+            request.Timeout = ErrorReportTimeoutMs;
+            var body = Encoding.UTF8.GetBytes(ErrorFormKey + HttpUtility.UrlEncode(message));
             request.ContentLength = body.Length;
             using (var stream = request.GetRequestStream()) stream.Write(body, 0, body.Length);
             using (var response = request.GetResponse()) { }

@@ -4,8 +4,6 @@ from models.equipment_information import EquipmentInformation
 
 
 class InformationForm:
-    TITLE = "Información del equipo"
-
     def __init__(self, app: App):
         self.app = app
         self.date = app.get_by_role("textbox", name="Fecha")

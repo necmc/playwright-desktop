@@ -1,5 +1,6 @@
 """Ejecuta el escenario funcional de la demo con su configuración local."""
 
+from http import HTTPStatus
 from http.client import HTTPException
 import sys
 import unittest
@@ -7,14 +8,17 @@ from urllib.request import urlopen
 
 sys.dont_write_bytecode = True
 
-from config import DEMO_URL
+from config import DEMO_URL, HEALTHCHECK_READ_BYTES, HEALTHCHECK_TIMEOUT_S
 
 
 def main() -> int:
     # El formulario identifica a pc-info aunque otro servicio también devuelva HTTP 200.
     try:
-        with urlopen(DEMO_URL, timeout=5) as response:
-            demo_ready = response.status == 200 and b'id="information-form"' in response.read(8192)
+        with urlopen(DEMO_URL, timeout=HEALTHCHECK_TIMEOUT_S) as response:
+            demo_ready = (
+                response.status == HTTPStatus.OK
+                and b'id="information-form"' in response.read(HEALTHCHECK_READ_BYTES)
+            )
     except (OSError, HTTPException):
         demo_ready = False
     if not demo_ready:
