@@ -4,7 +4,7 @@
 
 Las instrucciones de arranque y automatización están en el [README de la demo](../demo/README.md).
 
-playwright-desktop integra Playwright Python con aplicaciones de escritorio invocadas desde una web mediante `page.expect_app()`, `DesktopContext`, `App`, `Window` y `Alert` acoplados al `BrowserContext`. `lib/` contiene la implementación Python y Rust. La demo `pc-info` reúne la web, el formulario Java y el lanzador ClickOnce en `demo/pc-info/`. Su automatización está en `demo/pc-info-automation/`.
+playwright-desktop integra Playwright Python con aplicaciones de escritorio invocadas desde una web mediante `page.expect_app()`, `DesktopContext`, `App`, `Window` y `Alert` acoplados al `BrowserContext`. `lib/` organiza el núcleo nativo en Rust y el paquete/adaptador de Python dentro de un Cargo Workspace. La demo `pc-info` reúne la web, el formulario Java y el lanzador ClickOnce en `demo/pc-info/`. Su automatización está en `demo/pc-info-automation/`.
 
 ## Responsabilidades
 
@@ -14,7 +14,7 @@ playwright-desktop integra Playwright Python con aplicaciones de escritorio invo
 | JavaScript | Solicitar la activación ClickOnce y consultar el resultado de la operación. |
 | Lanzador C# | Leer los argumentos de activación y ejecutar el JAR con el runtime Java configurado. |
 | Formulario Java | Precargar los datos del equipo, permitir su edición y devolverlos a la web. |
-| Librería Python/Rust | Extender `Page` con `page.expect_app()`, asociar un `DesktopContext` por `BrowserContext`, aislar ventanas por sesión (`only_new`), detectar el idioma del SO (`os_language`) y usar Java Access Bridge o UI Automation según el proveedor disponible. |
+| Librería Python/Rust | Separar el núcleo multi-SO/multi-proveedor en `lib/core/` (aislamiento por sesión `only_new`, idioma del SO `os_language`, Java Access Bridge y UI Automation) del adaptador PyO3 (`lib/bindings/python/`) y el paquete Python (`lib/python/`) que extiende `Page` con `page.expect_app()` y `DesktopContext`. |
 
 ## Flujo de la demo
 
@@ -91,26 +91,33 @@ Playwright se conecta mediante `connect_over_cdp(no_defaults=True)`. En `fixture
 
 ### Desarrollo de la librería
 
+El directorio `lib/` se organiza como un Cargo Workspace para separar el núcleo nativo de los adaptadores de lenguaje:
+
+- `lib/Cargo.toml` define el workspace de Rust y centraliza la versión del paquete.
+- `lib/core/` contiene el crate `playwright-desktop-core`, independiente del lenguaje cliente y del proveedor de accesibilidad.
+- `lib/bindings/python/` contiene el adaptador PyO3 (`playwright-desktop-py`) que expone el módulo nativo `_native`.
+- `lib/python/` agrupa el paquete `playwright_desktop/`, su descripción (`lib/python/README.md`) y sus pruebas (`lib/python/tests/`), manteniendo `lib/pyproject.toml` en la raíz de `lib/`.
+
 La compilación requiere Python, Maturin, Rust MSVC y las herramientas C++ de Visual Studio. El comando se ejecuta desde la raíz del repositorio.
 
 ```powershell
 .\lib\scripts\build_py.ps1
 ```
 
-El script limpia `lib/rust/target/python/` y `lib/dist/python/` antes de ejecutar `maturin`. Si la limpieza falla, la compilación se detiene. El wheel y el paquete fuente (`.tar.gz`) quedan en `lib/dist/python/` e incluyen `playwright_desktop` y sus metadatos. `lib/README.md` aporta la descripción del paquete.
+El script limpia `lib/target/python/` y `lib/dist/python/` antes de ejecutar `maturin`. Si la limpieza falla, la compilación se detiene. El wheel y el paquete fuente (`.tar.gz`) quedan en `lib/dist/python/` e incluyen `playwright_desktop` y sus metadatos. `lib/python/README.md` aporta la descripción del paquete.
 
 La compilación aplica el remapeo de rutas de Rust y Maturin elimina los símbolos de depuración. El SBOM automático de Rust está desactivado para evitar que el wheel incluya rutas de construcción. [Remapeo de rutas de Rust](https://doc.rust-lang.org/rustc/remap-source-paths.html).
 
-Las pruebas de Rust se ejecutan con Cargo.
+Las pruebas de Rust se ejecutan sobre el workspace completo con Cargo.
 
 ```powershell
-cargo test --manifest-path lib/rust/Cargo.toml
+cargo test --manifest-path lib/Cargo.toml --workspace --locked
 ```
 
 Las pruebas internas de Python se ejecutan con `unittest`.
 
 ```powershell
-py -m unittest discover -s lib/tests -v
+py -m unittest discover -s lib/python/tests -v
 ```
 
 ### Herramientas del agente

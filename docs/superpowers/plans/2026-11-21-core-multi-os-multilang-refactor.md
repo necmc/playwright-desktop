@@ -392,7 +392,7 @@ git commit -m "refactor(lib): separar núcleo multi-SO y binding Python en works
 - Consumes: workspace y artefactos `.whl` + `.tar.gz` generados en Task 4.
 - Produces: documentación técnica alineada a la estructura `lib/core` + `lib/bindings/python` + `lib/python/` (sin cubrir publicación ni credenciales) y verificación completa de las pruebas.
 
-- [ ] **Step 1: Actualizar `docs/documentacion-tecnica.md` reflejando la arquitectura de Cargo Workspace**
+- [x] **Step 1: Actualizar `docs/documentacion-tecnica.md` reflejando la arquitectura de Cargo Workspace**
 
 Actualizar la sección de responsabilidades y `### Desarrollo de la librería` para documentar:
 - `lib/core/` contiene el núcleo Rust independiente del lenguaje cliente y del proveedor de accesibilidad.
@@ -400,7 +400,7 @@ Actualizar la sección de responsabilidades y `### Desarrollo de la librería` p
 - El comando de pruebas Rust pasa a `cargo test --manifest-path lib/Cargo.toml --workspace` y las pruebas Python pasan a `py -m unittest discover -s lib/python/tests -v`.
 - No documentar flujos de publicación ni credenciales.
 
-- [ ] **Step 2: Ejecutar suite completa Rust + Python + Swing/JAB + Windows UIA + verificación de demo**
+- [x] **Step 2: Ejecutar suite completa Rust + Python + Swing/JAB + Windows UIA + verificación de demo**
 
 Run:
 ```powershell
@@ -416,7 +416,7 @@ py -B -m unittest discover -s lib/python/tests -v
 Validar `git grep -nE "Restart Python" -- lib/` (0 coincidencias) y confirmar que la demo `demo/pc-info-automation` no tuvo roturas (`py_compile` / ejecución E2E en sesión interactiva).
 Expected: PASS 100% (0 fallos, 0 errores).
 
-- [ ] **Step 3: Marcar checkboxes del plan y comitear cierre de documentación**
+- [x] **Step 3: Marcar checkboxes del plan y comitear cierre de documentación**
 
 ```bash
 git add docs/documentacion-tecnica.md docs/superpowers/plans/2026-11-21-core-multi-os-multilang-refactor.md
