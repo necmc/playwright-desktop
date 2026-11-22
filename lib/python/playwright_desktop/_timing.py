@@ -5,7 +5,7 @@ from time import monotonic
 
 from ._errors import DesktopTimeoutError
 
-DEFAULT_TIMEOUT_MS = 10_000
+DEFAULT_TIMEOUT_MS = 10000
 
 
 class Deadline:

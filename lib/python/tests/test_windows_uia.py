@@ -132,7 +132,7 @@ class WindowsUiaTests(unittest.TestCase):
             with page.expect_app(title=self.title) as opened:
                 self.start_window(renamed)
             app = opened.value
-            app.get_by_role("button", name="Mostrar aviso").click(timeout=3_000)
+            app.get_by_role("button", name="Mostrar aviso").click(timeout=3000)
             self.wait_for_result("notice")
 
     def test_one_page_uses_native_windows_and_swing_automatically(self):

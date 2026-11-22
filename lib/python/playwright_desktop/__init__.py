@@ -2,10 +2,13 @@
 
 from importlib.metadata import PackageNotFoundError as _PackageNotFoundError, version as _package_version
 
+_PACKAGE_NAME = "playwright-desktop"
+_FALLBACK_VERSION = "0.0.0"
+
 try:
-    __version__ = _package_version("playwright-desktop")
+    __version__ = _package_version(_PACKAGE_NAME)
 except _PackageNotFoundError:
-    __version__ = "0.0.0"
+    __version__ = _FALLBACK_VERSION
 
 from ._errors import (
     AmbiguousMatchError, BridgeUnavailableError, DesktopActionError, DesktopBusyError,

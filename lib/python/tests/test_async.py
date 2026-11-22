@@ -37,7 +37,7 @@ class Engine:
         self.request = Request()
         return self.request
 
-    def invoke(self, request, operation, **parameters):
+    def invoke(self, request, params):
         self.native_thread = get_ident()
         self.entered.set()
         if not self.release.wait(2):
@@ -242,10 +242,10 @@ class AsyncTests(unittest.IsolatedAsyncioTestCase):
             await app.close()
 
         self.assertEqual(
-            [call.args[1] for call in invoke.call_args_list],
+            [call.args[1].operation for call in invoke.call_args_list],
             ["prepare", "capture", "read_text", "bring_to_front", "click", "close_window"],
         )
-        self.assertEqual([call.kwargs["window_id"] for call in invoke.call_args_list[2:]], [2, 2, 2, 2])
+        self.assertEqual([call.args[1].window_id for call in invoke.call_args_list[2:]], [2, 2, 2, 2])
         self.assertFalse(self.context.is_closed())
 
 

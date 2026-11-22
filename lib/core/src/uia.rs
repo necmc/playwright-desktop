@@ -1,15 +1,18 @@
 //! UI Automation objects belong to the MTA worker which created them.
 
 use crate::{
+    config::roles,
     engine::{ControlAction, ControlResult, RequestState},
-    error::{Failure, Result},
+    error::{Failure, Result, codes},
     windows::{self, WindowState},
 };
 use ::windows::{
     Win32::{
         System::{
-            Com::{CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx,
-                  CoUninitialize},
+            Com::{
+                CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx,
+                CoUninitialize,
+            },
             Variant::VARIANT,
         },
         UI::Accessibility::*,
@@ -44,11 +47,11 @@ impl Client {
     pub(crate) fn new() -> Result<Self> {
         // SAFETY: the UIA worker owns its COM apartment and has no windows.
         unsafe { CoInitializeEx(None, COINIT_MULTITHREADED).ok() }
-            .map_err(|error| Failure::new("BRIDGE", format!("Cannot initialize UI Automation: {error}")))?;
+            .map_err(|error| Failure::new(codes::BRIDGE, format!("Cannot initialize UI Automation: {error}")))?;
         let apartment = Apartment;
         // SAFETY: COM is initialized and the interface matches the UI Automation class.
         let automation = unsafe { CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER) }
-            .map_err(|error| Failure::new("BRIDGE", format!("Cannot create UI Automation: {error}")))?;
+            .map_err(|error| Failure::new(codes::BRIDGE, format!("Cannot create UI Automation: {error}")))?;
         Ok(Self { automation, _apartment: apartment })
     }
 
@@ -59,7 +62,7 @@ impl Client {
         // SAFETY: handle comes from Win32 enumeration and COM stays on its owner thread.
         match unsafe { self.automation.ElementFromHandle(windows::hwnd(window.hwnd)) } {
             Ok(root) => Ok(Some(Target { root })),
-            Err(error) if error.code().0 as u32 == UIA_E_ELEMENTNOTAVAILABLE || !windows::valid(window) => Ok(None),
+            Err(error) if is_unavailable(&error, window) => Ok(None),
             Err(error) => Err(action_error("access the window", error)),
         }
     }
@@ -69,12 +72,18 @@ impl Client {
             return WindowState::Closed;
         }
         let Ok(Some(current)) = self.attach(window) else {
-            return WindowState::Inaccessible(Failure::new("STALE", "The UI Automation window is no longer accessible."));
+            return WindowState::Inaccessible(Failure::new(
+                codes::STALE,
+                "The UI Automation window is no longer accessible.",
+            ));
         };
         // SAFETY: both elements belong to this worker's live COM apartment.
         match unsafe { self.automation.CompareElements(&target.root, &current.root) } {
             Ok(same) if same.as_bool() => WindowState::Ready,
-            _ => WindowState::Replaced(Failure::new("STALE", "Windows reused the handle for a different UI Automation window.")),
+            _ => WindowState::Replaced(Failure::new(
+                codes::STALE,
+                "Windows reused the handle for a different UI Automation window.",
+            )),
         }
     }
 
@@ -83,8 +92,15 @@ impl Client {
         scope: Option<Selector<'_>>, request: &RequestState,
     ) -> Result<Option<ControlResult>> {
         match (&action, control.role) {
-            (ControlAction::WaitVisible, _) | (ControlAction::Click, "button" | "link" | "menuitem") => {}
-            _ => return Err(Failure::new("ACTION", "UI Automation supports wait_for() and limits click() to buttons, links and menu items.")),
+            (ControlAction::WaitVisible, _) => {}
+            (ControlAction::Click, role)
+                if matches!(role, r if r == roles::BUTTON || r == roles::LINK || r == roles::MENUITEM) => {}
+            _ => {
+                return Err(Failure::new(
+                    codes::ACTION,
+                    "UI Automation supports wait_for() and limits click() to buttons, links and menu items.",
+                ));
+            }
         }
         let check = || request.check();
         let container = if let Some(scope) = scope {
@@ -98,7 +114,10 @@ impl Client {
             return Ok(Some(ControlResult { text: None }));
         }
         // SAFETY: the element is live on this worker; stale elements report an HRESULT.
-        if !unsafe { element.CurrentIsEnabled() }.map_err(|error| action_error("check whether the control is enabled", error))?.as_bool() {
+        if !unsafe { element.CurrentIsEnabled() }
+            .map_err(|error| action_error("check whether the control is enabled", error))?
+            .as_bool()
+        {
             return Ok(None);
         }
         check()?;
@@ -153,19 +172,7 @@ impl Client {
     fn find(
         &self, root: &IUIAutomationElement, selector: Selector<'_>, check: &dyn Fn() -> Result<()>,
     ) -> Result<Option<IUIAutomationElement>> {
-        let control_type = match selector.role {
-            "button" => UIA_ButtonControlTypeId,
-            "text" => UIA_TextControlTypeId,
-            "textbox" => UIA_EditControlTypeId,
-            "link" => UIA_HyperlinkControlTypeId,
-            "menuitem" => UIA_MenuItemControlTypeId,
-            "dialog" => UIA_WindowControlTypeId,
-            "group" => UIA_GroupControlTypeId,
-            "pane" => UIA_PaneControlTypeId,
-            "menu" => UIA_MenuControlTypeId,
-            "listitem" => UIA_ListItemControlTypeId,
-            _ => return Err(Failure::new("CONFIGURATION", "Unsupported UI Automation role.")),
-        };
+        let control_type = uia_control_type(selector.role)?;
         check()?;
         // SAFETY: conditions and the descendants query belong to the current apartment.
         let elements = unsafe {
@@ -190,14 +197,31 @@ impl Client {
     }
 }
 
+fn uia_control_type(role: &str) -> Result<UIA_CONTROLTYPE_ID> {
+    match role {
+        roles::BUTTON => Ok(UIA_ButtonControlTypeId),
+        roles::TEXT => Ok(UIA_TextControlTypeId),
+        roles::TEXTBOX => Ok(UIA_EditControlTypeId),
+        roles::LINK => Ok(UIA_HyperlinkControlTypeId),
+        roles::MENUITEM => Ok(UIA_MenuItemControlTypeId),
+        roles::DIALOG => Ok(UIA_WindowControlTypeId),
+        roles::GROUP => Ok(UIA_GroupControlTypeId),
+        roles::PANE => Ok(UIA_PaneControlTypeId),
+        roles::MENU => Ok(UIA_MenuControlTypeId),
+        roles::LISTITEM => Ok(UIA_ListItemControlTypeId),
+        _ => Err(Failure::new(codes::CONFIGURATION, "Unsupported UI Automation role.")),
+    }
+}
+
 fn unique_visible<T>(matches: impl Iterator<Item = Result<Option<T>>>, selector: &Selector<'_>) -> Result<Option<T>> {
     let mut found = None;
     for candidate in matches {
         if let Some(candidate) = candidate? {
             if found.is_some() {
-                return Err(Failure::new("AMBIGUOUS", format!(
-                    "More than one visible {} is named {:?}.", selector.role, selector.name
-                )));
+                return Err(Failure::new(
+                    codes::AMBIGUOUS,
+                    format!("More than one visible {} is named {:?}.", selector.role, selector.name),
+                ));
             }
             found = Some(candidate);
         }
@@ -210,7 +234,7 @@ fn is_unavailable(error: &Error, window: &windows::Window) -> bool {
 }
 
 fn action_error(action: &str, error: Error) -> Failure {
-    Failure::new("ACTION", format!("UI Automation could not {action}: {error}"))
+    Failure::new(codes::ACTION, format!("UI Automation could not {action}: {error}"))
 }
 
 #[cfg(test)]
@@ -219,18 +243,18 @@ mod tests {
 
     #[test]
     fn only_one_visible_control_under_the_selected_root_can_match() {
-        let selector = Selector { role: "button", name: "Aplicar" };
+        let selector = Selector { role: roles::BUTTON, name: "Aplicar" };
         assert_eq!(unique_visible([Ok(None), Ok(Some(2))].into_iter(), &selector).unwrap(), Some(2));
         assert_eq!(unique_visible([Ok(None::<i32>)].into_iter(), &selector).unwrap(), None);
         let duplicate = unique_visible([Ok(Some(1)), Ok(Some(2))].into_iter(), &selector).unwrap_err();
-        assert_eq!(duplicate.code, "AMBIGUOUS");
+        assert_eq!(duplicate.code, codes::AMBIGUOUS);
     }
 
     #[test]
     fn an_unavailable_invoke_pattern_has_an_action_diagnostic() {
         let error = Error::from_hresult(::windows::core::HRESULT(UIA_E_NOTSUPPORTED as i32));
         let failure = action_error("get InvokePattern for the control", error);
-        assert_eq!(failure.code, "ACTION");
+        assert_eq!(failure.code, codes::ACTION);
         assert!(failure.message.contains("InvokePattern"));
     }
 }

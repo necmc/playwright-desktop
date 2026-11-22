@@ -1,10 +1,22 @@
 pub mod ffi;
 pub mod loader;
 
-use crate::{engine::RequestState, error::{Failure, Result}, windows};
+use crate::{
+    config::roles,
+    engine::RequestState,
+    error::{Failure, Result, codes},
+    windows,
+};
 use ffi::*;
 use loader::Library;
 use std::rc::Rc;
+
+const JAB_ROLE_TEXT: &str = "text";
+const JAB_ROLE_PUSH_BUTTON: &str = "push button";
+const JAB_ACTION_CLICK: &str = "click";
+const MAX_NODES: usize = 4096;
+const MAX_DEPTH: usize = 64;
+const MAX_ACTIONS: i32 = 256;
 
 struct ObjectInner { library: Rc<Library>, vm: VmId, object: JavaObject }
 impl Drop for ObjectInner {
@@ -18,13 +30,14 @@ impl Drop for ObjectInner {
 pub struct Object(Rc<ObjectInner>);
 
 pub fn decode(value: &[u16]) -> Result<String> {
-    let end = value.iter().position(|v| *v == 0).ok_or_else(|| Failure::new("ACTION", "Unterminated UTF-16 returned by Java Access Bridge."))?;
+    let end = value.iter().position(|v| *v == 0)
+        .ok_or_else(|| Failure::new(codes::ACTION, "Unterminated UTF-16 returned by Java Access Bridge."))?;
     decode_utf16(&value[..end])
 }
 
 fn decode_utf16(value: &[u16]) -> Result<String> {
     String::from_utf16(value)
-        .map_err(|_| Failure::new("ACTION", "Invalid UTF-16 returned by Java Access Bridge."))
+        .map_err(|_| Failure::new(codes::ACTION, "Invalid UTF-16 returned by Java Access Bridge."))
 }
 
 impl Object {
@@ -53,15 +66,17 @@ impl Object {
         let mut info = ContextInfo::zeroed();
         // SAFETY: info has the checked C layout and writable capacity.
         if unsafe { (self.0.library.info)(self.0.vm, self.0.object, &mut *info) } == 0 {
-            return Err(Failure::new("STALE", "The Java accessible context is no longer available."));
+            return Err(Failure::new(codes::STALE, "The Java accessible context is no longer available."));
         }
         Ok(info)
     }
 
     pub fn find(&self, role: &str, name: &str, check: &dyn Fn() -> Result<()>) -> Result<Option<Self>> {
-        const MAX_NODES: usize = 4096;
-        const MAX_DEPTH: usize = 64;
-        let expected = match role { "textbox" => "text", "button" => "push button", _ => return Err(Failure::new("ACTION", "Unsupported accessible role.")) };
+        let expected = match role {
+            r if r == roles::TEXTBOX => JAB_ROLE_TEXT,
+            r if r == roles::BUTTON => JAB_ROLE_PUSH_BUTTON,
+            _ => return Err(Failure::new(codes::ACTION, "Unsupported accessible role.")),
+        };
         let mut stack = vec![(self.clone(), 0)];
         let mut found = None;
         let mut visited = 0;
@@ -70,22 +85,29 @@ impl Object {
             visited += 1;
             let info = node.info()?;
             if decode(&info.role_en_us)? == expected && decode(&info.name)? == name {
-                if found.is_some() { return Err(Failure::new("AMBIGUOUS", format!("More than one {role} is named {name:?}."))); }
+                if found.is_some() {
+                    return Err(Failure::new(codes::AMBIGUOUS, format!("More than one {role} is named {name:?}.")));
+                }
                 found = Some(node.clone());
             }
             if !(0..=MAX_NODES as i32).contains(&info.children_count) {
-                return Err(Failure::new("ACTION", "Invalid or excessive child count from Java Access Bridge."));
+                return Err(Failure::new(codes::ACTION, "Invalid or excessive child count from Java Access Bridge."));
             }
             let children = info.children_count as usize;
             if visited + stack.len() + children > MAX_NODES || (depth == MAX_DEPTH && children != 0) {
-                return Err(Failure::new("ACTION", "The Java accessibility tree exceeds the traversal limit."));
+                return Err(Failure::new(codes::ACTION, "The Java accessibility tree exceeds the traversal limit."));
             }
             for index in (0..info.children_count).rev() {
                 check()?;
                 // SAFETY: the node is live; returned references are owned and released by Object.
                 let object = unsafe { (node.0.library.child)(node.0.vm, node.0.object, index) };
-                if object == 0 { return Err(Failure::new("STALE", "The Java accessibility tree changed during traversal.")); }
-                stack.push((Self(Rc::new(ObjectInner { library: node.0.library.clone(), vm: node.0.vm, object })), depth + 1));
+                if object == 0 {
+                    return Err(Failure::new(codes::STALE, "The Java accessibility tree changed during traversal."));
+                }
+                stack.push((
+                    Self(Rc::new(ObjectInner { library: node.0.library.clone(), vm: node.0.vm, object })),
+                    depth + 1,
+                ));
             }
         }
         Ok(found)
@@ -101,10 +123,13 @@ impl Object {
         let mut info = TextInfo::default();
         // SAFETY: writable checked TextInfo layout and live context.
         if unsafe { (self.0.library.text_info)(self.0.vm, self.0.object, &mut info, 0, 0) } == 0 {
-            return Err(Failure::new("ACTION", "The Java control does not expose text."));
+            return Err(Failure::new(codes::ACTION, "The Java control does not expose text."));
         }
         if !(0..MAX_TEXT as i32).contains(&info.count) {
-            return Err(Failure::new("ACTION", "Text exceeds the supported 1023 UTF-16 code units."));
+            return Err(Failure::new(
+                codes::ACTION,
+                format!("Text exceeds the supported {} UTF-16 code units.", MAX_TEXT - 1),
+            ));
         }
         if info.count == 0 { return Ok(String::new()); }
         let count = info.count as usize;
@@ -114,11 +139,14 @@ impl Object {
         if unsafe {
             (self.0.library.text_range)(self.0.vm, self.0.object, 0, info.count - 1, buffer.as_mut_ptr(), capacity)
         } == 0 {
-            return Err(Failure::new("ACTION", "Java Access Bridge could not read the text range."));
+            return Err(Failure::new(codes::ACTION, "Java Access Bridge could not read the text range."));
         }
         let text = &buffer[..count];
         if buffer[count] != 0 || text.contains(&0) {
-            return Err(Failure::new("ACTION", "Java Access Bridge returned an incomplete or unterminated text range."));
+            return Err(Failure::new(
+                codes::ACTION,
+                "Java Access Bridge returned an incomplete or unterminated text range.",
+            ));
         }
         decode_utf16(text)
     }
@@ -126,33 +154,42 @@ impl Object {
     pub fn fill(&self, text: &str, request: &RequestState) -> Result<()> {
         let mut value: Vec<u16> = text.encode_utf16().take(MAX_TEXT).collect();
         if value.len() == MAX_TEXT || value.contains(&0) {
-            return Err(Failure::new("INVALID_ARGUMENT", format!(
-                "Java Access Bridge accepts at most {} UTF-16 code units without embedded NUL.", MAX_TEXT - 1
-            )));
+            return Err(Failure::new(
+                codes::INVALID_ARGUMENT,
+                format!("Java Access Bridge accepts at most {} UTF-16 code units without embedded NUL.", MAX_TEXT - 1),
+            ));
         }
         value.push(0);
         request.begin_mutation()?;
         // SAFETY: value is NUL-terminated with checked size, context is live and editable.
         if unsafe { (self.0.library.set_text)(self.0.vm, self.0.object, value.as_ptr()) } == 0 {
-            return Err(Failure::new("ACTION", "Java Access Bridge rejected the text replacement."));
+            return Err(Failure::new(codes::ACTION, "Java Access Bridge rejected the text replacement."));
         }
         request.check()?;
-        if self.text()? != text { return Err(Failure::new("ACTION", "The Java text value does not match after replacement.")); }
+        if self.text()? != text {
+            return Err(Failure::new(codes::ACTION, "The Java text value does not match after replacement."));
+        }
         Ok(())
     }
 
     pub fn click(&self, request: &RequestState) -> Result<()> {
         let mut actions = Actions::zeroed();
         // SAFETY: actions has the checked header layout and this context is still live.
-        if unsafe { (self.0.library.actions)(self.0.vm, self.0.object, &mut *actions) } == 0 || !(1..=256).contains(&actions.count) {
-            return Err(Failure::new("ACTION", "The Java button exposes no supported accessible action."));
+        if unsafe { (self.0.library.actions)(self.0.vm, self.0.object, &mut *actions) } == 0
+            || !(1..=MAX_ACTIONS).contains(&actions.count)
+        {
+            return Err(Failure::new(codes::ACTION, "The Java button exposes no supported accessible action."));
         }
         let mut selected = None;
         for index in 0..actions.count as usize {
-            if decode(&actions.actions[index].name)?.eq_ignore_ascii_case("click") { selected = Some(index); break; }
+            if decode(&actions.actions[index].name)?.eq_ignore_ascii_case(JAB_ACTION_CLICK) {
+                selected = Some(index);
+                break;
+            }
         }
-        let index = selected.or(if actions.count == 1 { Some(0) } else { None })
-            .ok_or_else(|| Failure::new("ACTION", "The button's accessible action is ambiguous."))?;
+        let index = selected
+            .or(if actions.count == 1 { Some(0) } else { None })
+            .ok_or_else(|| Failure::new(codes::ACTION, "The button's accessible action is ambiguous."))?;
         let mut todo = ActionsToDo::zeroed();
         todo.count = 1;
         todo.actions[0] = actions.actions[index];
@@ -160,7 +197,10 @@ impl Object {
         request.begin_mutation()?;
         // SAFETY: exactly one action obtained from this live control is requested once.
         if unsafe { (self.0.library.do_actions)(self.0.vm, self.0.object, &mut *todo, &mut failed) } == 0 {
-            return Err(Failure::new("ACTION", format!("Java rejected the button action (index {failed}); it was not retried.")));
+            return Err(Failure::new(
+                codes::ACTION,
+                format!("Java rejected the button action (index {failed}); it was not retried."),
+            ));
         }
         Ok(())
     }

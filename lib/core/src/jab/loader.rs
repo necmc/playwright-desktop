@@ -1,9 +1,18 @@
 use super::ffi::*;
-use crate::error::{Failure, Result};
+use crate::error::{Failure, Result, codes};
 use ::windows::Win32::Foundation::{FreeLibrary, HMODULE};
-use ::windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryExW, LOAD_LIBRARY_SEARCH_DEFAULT_DIRS, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR};
+use ::windows::Win32::System::LibraryLoader::{
+    GetProcAddress, LOAD_LIBRARY_SEARCH_DEFAULT_DIRS, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR,
+    LoadLibraryExW,
+};
 use ::windows::core::{PCSTR, PCWSTR};
-use std::{fs, path::{Path, PathBuf}, rc::Rc};
+use std::{fs, ops::Range, path::{Path, PathBuf}, rc::Rc};
+
+const BRIDGE_RELATIVE_PATH: &str = "bin/windowsaccessbridge-64.dll";
+const DOS_SIGNATURE: &[u8; 2] = b"MZ";
+const PE_OFFSET_RANGE: Range<usize> = 0x3c..0x40;
+const PE_SIGNATURE: &[u8; 4] = b"PE\0\0";
+const MACHINE_AMD64: [u8; 2] = [0x64, 0x86];
 
 struct Module(HMODULE);
 impl Module {
@@ -19,7 +28,7 @@ impl Module {
             )
         }
         .map(Self)
-        .map_err(|error| Failure::new("BRIDGE", format!("Cannot load Java Access Bridge: {error}")))
+        .map_err(|error| Failure::new(codes::BRIDGE, format!("Cannot load Java Access Bridge: {error}")))
     }
 }
 
@@ -46,12 +55,22 @@ pub struct Library {
 }
 
 pub fn dll_path(java_home: &str) -> Result<PathBuf> {
-    let path = Path::new(java_home).join("bin/windowsaccessbridge-64.dll");
-    let path = fs::canonicalize(&path).map_err(|e| Failure::new("BRIDGE", format!("Cannot find Java Access Bridge at {}: {e}", path.display())))?;
-    let bytes = fs::read(&path).map_err(|e| Failure::new("BRIDGE", e.to_string()))?;
-    let offset = bytes.get(0x3c..0x40).map(|v| u32::from_le_bytes(v.try_into().unwrap()) as usize);
-    if bytes.get(..2) != Some(b"MZ") || offset.and_then(|n| bytes.get(n..n+6)).is_none_or(|header| header[..4] != *b"PE\0\0" || header[4..6] != [0x64, 0x86]) {
-        return Err(Failure::new("BRIDGE", "The Java bridge must be a Windows x64 DLL."));
+    let path = Path::new(java_home).join(BRIDGE_RELATIVE_PATH);
+    let path = fs::canonicalize(&path).map_err(|e| {
+        Failure::new(codes::BRIDGE, format!("Cannot find Java Access Bridge at {}: {e}", path.display()))
+    })?;
+    let bytes = fs::read(&path).map_err(|e| Failure::new(codes::BRIDGE, e.to_string()))?;
+    let offset = bytes.get(PE_OFFSET_RANGE).map(|v| u32::from_le_bytes(v.try_into().unwrap()) as usize);
+    let header_len = PE_SIGNATURE.len() + MACHINE_AMD64.len();
+    if bytes.get(..DOS_SIGNATURE.len()) != Some(DOS_SIGNATURE.as_slice())
+        || offset
+            .and_then(|n| bytes.get(n..n + header_len))
+            .is_none_or(|header| {
+                header[..PE_SIGNATURE.len()] != *PE_SIGNATURE
+                    || header[PE_SIGNATURE.len()..header_len] != MACHINE_AMD64
+            })
+    {
+        return Err(Failure::new(codes::BRIDGE, "The Java bridge must be a Windows x64 DLL."));
     }
     Ok(path)
 }
@@ -59,7 +78,12 @@ pub fn dll_path(java_home: &str) -> Result<PathBuf> {
 unsafe fn symbol<T: Copy>(module: HMODULE, name: &'static [u8]) -> Result<T> {
     // SAFETY: name is a static NUL-terminated symbol; callers select its exact header ABI.
     let function = unsafe { GetProcAddress(module, PCSTR(name.as_ptr())) }
-        .ok_or_else(|| Failure::new("BRIDGE", format!("Missing Java bridge symbol {}.", String::from_utf8_lossy(&name[..name.len()-1]))))?;
+        .ok_or_else(|| {
+            Failure::new(
+                codes::BRIDGE,
+                format!("Missing Java bridge symbol {}.", String::from_utf8_lossy(&name[..name.len() - 1])),
+            )
+        })?;
     assert_eq!(size_of::<T>(), size_of_val(&function));
     // SAFETY: every instantiation below is a C function pointer with a checked symbol ABI.
     Ok(unsafe { std::mem::transmute_copy(&function) })

@@ -1,16 +1,22 @@
 use super::{
-    Arguments, ActiveCommand, CoreReply, Operation, PendingCall, QueuedCommand,
+    ActiveCommand, Arguments, CoreReply, Operation, PendingCall, QueuedCommand,
     RequestState, Shared, WindowOperation, engine_unavailable_failure,
 };
 use super::platform::{
-    CandidateSearch, ControlAction, Platform, ProviderSelection, WindowQuery,
+    CandidateSearch, ControlAction, Platform, ProviderSelection, WINDOW_NOT_FOUND_MESSAGE,
+    WindowQuery,
 };
-use crate::error::{Failure, Result};
+use crate::error::{Failure, Result, codes};
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     sync::{Arc, atomic::Ordering, mpsc::{self, Receiver}},
     time::{Duration, Instant},
 };
+
+const IDLE_POLL_INTERVAL: Duration = Duration::from_millis(15);
+const BUSY_POLL_INTERVAL: Duration = Duration::from_millis(5);
+const MAX_BATCH_DRAIN: usize = 64;
+const CLEANUP_TIMEOUT: Duration = Duration::from_secs(10);
 
 const TIMEOUT_MESSAGE: &str =
     "No unique desktop window or control became ready before the deadline. Check its title, PID and accessibility provider.";
@@ -58,11 +64,12 @@ impl<P: Platform> Worker<P> {
         let shared = self.shared.clone();
         let mut pending = VecDeque::new();
         loop {
-            if let Ok(command) = receiver.recv_timeout(Duration::from_millis(if pending.is_empty() { 15 } else { 5 })) {
+            let poll_interval = if pending.is_empty() { IDLE_POLL_INTERVAL } else { BUSY_POLL_INTERVAL };
+            if let Ok(command) = receiver.recv_timeout(poll_interval) {
                 pending.push_back(command.activate());
             }
-            pending.extend(receiver.try_iter().take(64).map(QueuedCommand::activate));
-            let _ = shared.run_native(Instant::now() + Duration::from_secs(10), || self.cleanup());
+            pending.extend(receiver.try_iter().take(MAX_BATCH_DRAIN).map(QueuedCommand::activate));
+            let _ = shared.run_native(Instant::now() + CLEANUP_TIMEOUT, || self.cleanup());
             self.process_pending(&mut pending);
         }
     }
@@ -84,7 +91,7 @@ impl<P: Platform> Worker<P> {
                 Ok(None) if command.pending.is_some() || !command.request.immediate => pending.push_back(command),
                 Ok(None) => self.complete(
                     command,
-                    Err(Failure::new("TIMEOUT", "The requested desktop window or control is not ready (timeout=0).")),
+                    Err(Failure::new(codes::TIMEOUT, "The requested desktop window or control is not ready (timeout=0).")),
                 ),
                 Ok(Some(reply)) => self.complete(command, Ok(reply)),
                 Err(error) => self.complete(command, Err(error)),
@@ -119,7 +126,8 @@ impl<P: Platform> Worker<P> {
             .map(|(id, _)| *id)
             .collect();
         for id in removed {
-            self.release_window(id, &live);
+            let record_closed = self.windows.get(&id).is_some_and(|item| live.contains(&item.session));
+            self.remove_window(id, record_closed);
         }
         if live != self.live {
             self.platform.retain_sessions(live.clone());
@@ -141,7 +149,7 @@ impl<P: Platform> Worker<P> {
             .find(|(_, window)| window.session == session && window.capture == Some(capture_id))
             .map(|(id, _)| *id);
         if let Some(id) = owned {
-            self.release_window(id, &HashSet::new());
+            self.remove_window(id, false);
         }
     }
 
@@ -149,7 +157,10 @@ impl<P: Platform> Worker<P> {
         if self.windows.values().any(|window| window.session != session)
             || self.captures.values().any(|capture| capture.session != session)
         {
-            return Err(Failure::new("BUSY", "Another desktop flow is active. Close its window or desktop session first."));
+            return Err(Failure::new(
+                codes::BUSY,
+                "Another desktop flow is active. Close its window or desktop session first.",
+            ));
         }
         Ok(())
     }
@@ -176,7 +187,10 @@ impl<P: Platform> Worker<P> {
         };
         if candidates.next().is_some() {
             let filter = if query.title.is_empty() { "an exact title" } else { "a PID" };
-            return Err(Failure::new("AMBIGUOUS", format!("More than one window matches. Add {filter} to narrow the search.")));
+            return Err(Failure::new(
+                codes::AMBIGUOUS,
+                format!("More than one window matches. Add {filter} to narrow the search."),
+            ));
         }
         request.check()?;
         let key = self.platform.window_key(&candidate);
@@ -248,17 +262,27 @@ impl<P: Platform> Worker<P> {
                 };
                 self.act_on_window(command, id, operation)
             }
-            PendingCall::ResolveProvider { id, result, until, fallback } => {
-                let provider = match receive(&result) {
-                    Ok(Some(response)) => response?,
-                    Err(_) => fallback,
-                    Ok(None) if Instant::now() >= until => fallback,
-                    Ok(None) => {
-                        command.pending = Some(PendingCall::ResolveProvider { id, result, until, fallback });
-                        return Ok(None);
+            PendingCall::ResolveProvider { id, mut probes, until, fallback } => {
+                while let Some((_, receiver)) = probes.front() {
+                    match receive(receiver) {
+                        Ok(Some(Ok(true))) => {
+                            let (selected, _) = probes.pop_front().unwrap();
+                            return self.dispatch(command, id, selected);
+                        }
+                        Ok(Some(Ok(false))) | Err(_) => {
+                            probes.pop_front();
+                        }
+                        Ok(Some(Err(error))) => return Err(error),
+                        Ok(None) if Instant::now() >= until => {
+                            probes.pop_front();
+                        }
+                        Ok(None) => {
+                            command.pending = Some(PendingCall::ResolveProvider { id, probes, until, fallback });
+                            return Ok(None);
+                        }
                     }
-                };
-                self.dispatch(command, id, provider)
+                }
+                self.dispatch(command, id, fallback)
             }
             PendingCall::Action { id, result } => {
                 let Some(response) = receive(&result)? else {
@@ -269,8 +293,8 @@ impl<P: Platform> Worker<P> {
                     Ok(Some(result)) => Ok(Some(self.reply_for_window(id, result.text))),
                     Ok(None) => Ok(None),
                     Err(error) => {
-                        if error.code == "STALE" {
-                            self.invalidate_window(id);
+                        if error.code == codes::STALE {
+                            self.remove_window(id, true);
                         }
                         Err(error)
                     }
@@ -338,12 +362,15 @@ impl<P: Platform> Worker<P> {
         Ok(Some(CoreReply::handle(id)))
     }
 
-    fn complete_capture(&mut self, command: &mut ActiveCommand<P>, capture_id: u64) -> Result<Option<CoreReply>> {
-        let capture = self
-            .captures
+    fn capture(&self, capture_id: u64, session: u64) -> Result<&Capture<P::WindowKey>> {
+        self.captures
             .get(&capture_id)
-            .filter(|capture| capture.session == command.request.session.id)
-            .ok_or_else(|| Failure::new("CLOSED", "The window capture is no longer active."))?;
+            .filter(|capture| capture.session == session)
+            .ok_or_else(|| Failure::new(codes::CLOSED, "The window capture is no longer active."))
+    }
+
+    fn complete_capture(&mut self, command: &mut ActiveCommand<P>, capture_id: u64) -> Result<Option<CoreReply>> {
+        let capture = self.capture(capture_id, command.request.session.id)?;
         let query = capture.query.clone();
         let before = capture.before.clone();
         match self.platform.find_candidates(command.request.clone(), &query, &before)? {
@@ -356,11 +383,7 @@ impl<P: Platform> Worker<P> {
     }
 
     fn finish_capture(&mut self, request: &RequestState, capture_id: u64, candidates: Vec<P::Window>) -> Result<Option<CoreReply>> {
-        let capture = self
-            .captures
-            .get(&capture_id)
-            .filter(|capture| capture.session == request.session.id)
-            .ok_or_else(|| Failure::new("CLOSED", "The window capture is no longer active."))?;
+        let capture = self.capture(capture_id, request.session.id)?;
         let query = capture.query.clone();
         let before = capture.before.clone();
         let Some(id) = self.select_candidate(request, &query, candidates, Some((capture_id, &before)))? else {
@@ -402,11 +425,11 @@ impl<P: Platform> Worker<P> {
         }
         let item = self.window(id, session)?;
         if !self.platform.is_window_alive(&item.window) {
-            self.invalidate_window(id);
+            self.remove_window(id, true);
             if tolerates_closed {
                 return Ok(Some(CoreReply::handle(id)));
             }
-            return Err(Failure::new("STALE", "The native window no longer exists."));
+            return Err(Failure::new(codes::STALE, WINDOW_NOT_FOUND_MESSAGE));
         }
         match operation {
             WindowOperation::WaitClosed => return Ok(None),
@@ -423,8 +446,8 @@ impl<P: Platform> Worker<P> {
         let window = item.window.clone();
         match self.platform.resolve_provider(request.clone(), window) {
             ProviderSelection::Ready(provider) => self.dispatch(command, id, provider),
-            ProviderSelection::Pending { result, until, fallback } => {
-                command.pending = Some(PendingCall::ResolveProvider { id, result, until, fallback });
+            ProviderSelection::Pending { probes, until, fallback } => {
+                command.pending = Some(PendingCall::ResolveProvider { id, probes, until, fallback });
                 Ok(None)
             }
         }
@@ -435,7 +458,7 @@ impl<P: Platform> Worker<P> {
         let session = command.request.session.id;
         let window = self.window(id, session)?.window.clone();
         if !self.platform.post_close(&window)? {
-            self.invalidate_window(id);
+            self.remove_window(id, true);
             return Ok(Some(CoreReply::handle(id)));
         }
         command.pending = Some(PendingCall::Closing { id });
@@ -449,7 +472,7 @@ impl<P: Platform> Worker<P> {
         }
         let item = self.window(id, session)?;
         if !self.platform.is_window_alive(&item.window) {
-            self.invalidate_window(id);
+            self.remove_window(id, true);
             return Ok(Some(CoreReply::handle(id)));
         }
         command.pending = Some(PendingCall::Closing { id });
@@ -485,28 +508,17 @@ impl<P: Platform> Worker<P> {
         self.windows
             .get(&id)
             .filter(|window| window.session == session)
-            .ok_or_else(|| Failure::new("STALE", "This native window is closed or belongs to another session."))
+            .ok_or_else(|| Failure::new(codes::STALE, "This native window is closed or belongs to another session."))
     }
 
-    fn invalidate_window(&mut self, id: u64) {
+    fn remove_window(&mut self, id: u64, record_closed: bool) {
         if let Some(item) = self.windows.remove(&id) {
-            self.closed.insert(id, item.session);
-            self.release_provider(id, item.provider);
-        }
-    }
-
-    fn release_window(&mut self, id: u64, live: &HashSet<u64>) {
-        if let Some(item) = self.windows.remove(&id) {
-            if live.contains(&item.session) {
+            if record_closed {
                 self.closed.insert(id, item.session);
             }
-            self.release_provider(id, item.provider);
-        }
-    }
-
-    fn release_provider(&self, id: u64, provider: Option<P::Provider>) {
-        if let Some(provider) = provider {
-            self.platform.release(id, provider);
+            if let Some(provider) = item.provider {
+                self.platform.release(id, provider);
+            }
         }
     }
 }
@@ -518,6 +530,6 @@ fn receive<T>(reply: &Receiver<T>) -> Result<Option<T>> {
     match reply.try_recv() {
         Ok(value) => Ok(Some(value)),
         Err(mpsc::TryRecvError::Empty) => Ok(None),
-        Err(mpsc::TryRecvError::Disconnected) => Err(Failure::new("BRIDGE", "The desktop accessibility provider stopped.")),
+        Err(mpsc::TryRecvError::Disconnected) => Err(Failure::new(codes::BRIDGE, "The desktop accessibility provider stopped.")),
     }
 }

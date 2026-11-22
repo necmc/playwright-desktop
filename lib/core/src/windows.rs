@@ -1,4 +1,4 @@
-use crate::error::{Failure, Result};
+use crate::error::{Failure, Result, codes};
 use ::windows::Win32::Foundation::{CloseHandle, HWND, LPARAM, NO_ERROR, SetLastError, WPARAM};
 use ::windows::Win32::Globalization::{GetUserDefaultUILanguage, LCIDToLocaleName};
 use ::windows::Win32::System::Threading::{
@@ -12,6 +12,15 @@ use ::windows::Win32::UI::WindowsAndMessaging::{
 };
 use ::windows::core::{BOOL, PWSTR};
 use std::path::PathBuf;
+
+const MAX_PROCESS_PATH_UTF16: usize = 32768;
+const MAX_WINDOW_TITLE_UTF16: i32 = 32768;
+const MAX_PUMP_MESSAGES: usize = 128;
+const LOCALE_NAME_MAX_LENGTH: usize = 85;
+const DEFAULT_OS_LANGUAGE: &str = "en";
+const JAVA_LAUNCHER_NAMES: &[&str] = &["java.exe", "javaw.exe"];
+
+pub(crate) const WINDOW_NOT_FOUND_MESSAGE: &str = "The native window no longer exists.";
 
 #[derive(Clone, Debug)]
 pub struct Window {
@@ -41,7 +50,7 @@ pub fn valid(window: &Window) -> bool {
 
 pub(crate) fn bring_to_front(window: &Window) -> Result<()> {
     if !valid(window) {
-        return Err(Failure::new("STALE", "The native window no longer exists."));
+        return Err(Failure::new(codes::STALE, WINDOW_NOT_FOUND_MESSAGE));
     }
     let handle = hwnd(window.hwnd);
     // SAFETY: handle is verified live for this PID immediately above.
@@ -53,7 +62,7 @@ pub(crate) fn bring_to_front(window: &Window) -> Result<()> {
         let _ = SetForegroundWindow(handle);
     }
     if !valid(window) {
-        return Err(Failure::new("STALE", "The native window no longer exists."));
+        return Err(Failure::new(codes::STALE, WINDOW_NOT_FOUND_MESSAGE));
     }
     Ok(())
 }
@@ -64,14 +73,14 @@ pub(crate) fn post_close(window: &Window) -> Result<bool> {
     }
     // SAFETY: handle is verified live; WM_CLOSE requests a graceful close without forcing termination.
     unsafe { PostMessageW(Some(hwnd(window.hwnd)), WM_CLOSE, WPARAM(0), LPARAM(0)) }
-        .map_err(|e| Failure::new("ACTION", format!("Cannot close native window: {e}")))?;
+        .map_err(|e| Failure::new(codes::ACTION, format!("Cannot close native window: {e}")))?;
     Ok(true)
 }
 
 fn executable_path(window: &Window) -> Option<PathBuf> {
     // SAFETY: the PID comes from the window, and the query uses a writable UTF-16 buffer.
     let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, window.pid) }.ok()?;
-    let mut buffer = vec![0u16; 32768];
+    let mut buffer = vec![0u16; MAX_PROCESS_PATH_UTF16];
     let mut length = buffer.len() as u32;
     let result = unsafe {
         let result = QueryFullProcessImageNameW(process, PROCESS_NAME_WIN32, PWSTR(buffer.as_mut_ptr()), &mut length);
@@ -85,7 +94,7 @@ fn executable_path(window: &Window) -> Option<PathBuf> {
 pub(crate) fn has_java_launcher_name(window: &Window) -> bool {
     executable_path(window).is_some_and(|path| {
         path.file_name().and_then(|name| name.to_str()).is_some_and(|name| {
-            name.eq_ignore_ascii_case("java.exe") || name.eq_ignore_ascii_case("javaw.exe")
+            JAVA_LAUNCHER_NAMES.iter().any(|candidate| name.eq_ignore_ascii_case(candidate))
         })
     })
 }
@@ -105,7 +114,7 @@ unsafe extern "system" fn collect(handle: HWND, parameter: LPARAM) -> BOOL {
             GetWindowThreadProcessId(handle, Some(&mut pid));
             if length == 0 && state.include_untitled {
                 state.values.push(Window { hwnd: handle.0 as isize, pid, title: String::new() });
-            } else if (1..32768).contains(&length) {
+            } else if (1..MAX_WINDOW_TITLE_UTF16).contains(&length) {
                 let mut text = vec![0; length as usize + 1];
                 let read = GetWindowTextW(handle, &mut text);
                 if read > 0 && GetWindowTextLengthW(handle) <= read {
@@ -127,7 +136,7 @@ pub fn list_for_query(include_untitled: bool) -> Result<Vec<Window>> {
     // SAFETY: collect only uses CollectState while this synchronous enumeration is active.
     if let Err(error) = unsafe { EnumWindows(Some(collect), LPARAM(&mut state as *mut _ as isize)) } {
         if error.code().0 != 0 {
-            return Err(Failure::new("ACTION", format!("Cannot enumerate Windows windows: {error}")));
+            return Err(Failure::new(codes::ACTION, format!("Cannot enumerate Windows windows: {error}")));
         }
     }
     Ok(state.values)
@@ -137,7 +146,7 @@ pub fn pump() {
     let mut message = MSG::default();
     // SAFETY: the worker owns this thread's Windows message queue.
     unsafe {
-        for _ in 0..128 {
+        for _ in 0..MAX_PUMP_MESSAGES {
             if !PeekMessageW(&mut message, None, 0, 0, PM_REMOVE).as_bool() { break; }
             let _ = TranslateMessage(&message);
             DispatchMessageW(&message);
@@ -146,7 +155,6 @@ pub fn pump() {
 }
 
 pub fn host_os_language() -> String {
-    const LOCALE_NAME_MAX_LENGTH: usize = 85;
     // SAFETY: GetUserDefaultUILanguage has no preconditions and LCIDToLocaleName writes into our fixed UTF-16 buffer.
     unsafe {
         let lang_id = u32::from(GetUserDefaultUILanguage());
@@ -163,5 +171,5 @@ pub fn host_os_language() -> String {
             }
         }
     }
-    "en".into()
+    DEFAULT_OS_LANGUAGE.into()
 }

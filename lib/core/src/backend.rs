@@ -1,19 +1,17 @@
 //! Windows desktop access for the Java Access Bridge backend.
 
 use crate::{
-    config::{ProviderId, SessionConfig, validate_absolute_path},
+    config::{JAVA_HOME_ERROR, JAVA_HOME_OPTION, SessionConfig, roles, validate_absolute_path},
     engine::{ControlAction, ControlResult, RequestState},
-    error::{Failure, Result},
+    error::{Failure, Result, codes},
     jab::{Object, loader::{Library, dll_path}},
     windows::{self, WindowState},
 };
 use std::{collections::HashSet, path::PathBuf, rc::Rc};
 
-pub(crate) const JAVA_PROVIDER_ID: ProviderId = "jab";
-pub(crate) const JAVA_HOME_OPTION: &str = "java.home";
-pub(crate) const JAVA_EXPLICIT_OPTION: &str = "java.explicit";
-
-const JAVA_HOME_ERROR: &str = "java_home must be an absolute runtime directory.";
+const STATE_SHOWING: &str = "showing";
+const STATE_ENABLED: &str = "enabled";
+const STATE_EDITABLE: &str = "editable";
 
 struct LoadedBridge {
     path: PathBuf,
@@ -53,7 +51,10 @@ impl Backend {
             return if self.bridge.is_some() {
                 Ok(())
             } else {
-                Err(Failure::new("BRIDGE", "Set JAVA_HOME or configure the Java runtime for Java Access Bridge."))
+                Err(Failure::new(
+                    codes::BRIDGE,
+                    "Set JAVA_HOME or configure the Java runtime for Java Access Bridge.",
+                ))
             };
         };
         validate_absolute_path(java_home, JAVA_HOME_ERROR)?;
@@ -81,7 +82,7 @@ impl Backend {
 
     pub(crate) fn attach(&self, window: windows::Window) -> Result<Option<Target>> {
         let bridge = self.bridge.as_ref()
-            .ok_or_else(|| Failure::new("BRIDGE", "The Java bridge is not initialized."))?;
+            .ok_or_else(|| Failure::new(codes::BRIDGE, "The Java bridge is not initialized."))?;
         Ok(Object::root(&bridge.library, &window).map(|root| Target { window, root }))
     }
 
@@ -108,23 +109,32 @@ impl Target {
         }
         match self.root.refresh(&self.window) {
             Some(current) if self.root.same(&current) => WindowState::Ready,
-            Some(_) => WindowState::Replaced(Failure::new("STALE", "Windows reused the handle for a different Java window.")),
-            None => WindowState::Inaccessible(Failure::new("STALE", "The Java window is no longer accessible.")),
+            Some(_) => WindowState::Replaced(Failure::new(
+                codes::STALE,
+                "Windows reused the handle for a different Java window.",
+            )),
+            None => WindowState::Inaccessible(Failure::new(
+                codes::STALE,
+                "The Java window is no longer accessible.",
+            )),
         }
     }
 
     pub(crate) fn perform(
         &self, action: ControlAction, role: &str, name: &str, request: &RequestState,
     ) -> Result<Option<ControlResult>> {
-        if !matches!(role, "textbox" | "button") || name.is_empty() {
-            return Err(Failure::new("CONFIGURATION", "A supported role and exact accessible name are required."));
+        if (role != roles::TEXTBOX && role != roles::BUTTON) || name.is_empty() {
+            return Err(Failure::new(
+                codes::CONFIGURATION,
+                "A supported role and exact accessible name are required.",
+            ));
         }
         let Some(control) = self.root.find(role, name, &|| request.check())? else { return Ok(None); };
         request.check()?;
         let required_states: &[&str] = match &action {
-            ControlAction::WaitVisible => &["showing"],
-            ControlAction::Fill(_) => &["showing", "enabled", "editable"],
-            _ => &["showing", "enabled"],
+            ControlAction::WaitVisible => &[STATE_SHOWING],
+            ControlAction::Fill(_) => &[STATE_SHOWING, STATE_ENABLED, STATE_EDITABLE],
+            _ => &[STATE_SHOWING, STATE_ENABLED],
         };
         if !control.has_states(required_states)? {
             return Ok(None);
@@ -132,17 +142,20 @@ impl Target {
         request.check()?;
         let text = match (action, role) {
             (ControlAction::WaitVisible, _) => None,
-            (ControlAction::ReadText, "textbox") => Some(control.text()?),
-            (ControlAction::Fill(text), "textbox") => { control.fill(&text, request)?; None }
-            (ControlAction::Click, "button") => { control.click(request)?; None }
-            _ => return Err(Failure::new("CONFIGURATION", "The action does not support this role.")),
+            (ControlAction::ReadText, r) if r == roles::TEXTBOX => Some(control.text()?),
+            (ControlAction::Fill(text), r) if r == roles::TEXTBOX => { control.fill(&text, request)?; None }
+            (ControlAction::Click, r) if r == roles::BUTTON => { control.click(request)?; None }
+            _ => return Err(Failure::new(codes::CONFIGURATION, "The action does not support this role.")),
         };
         Ok(Some(ControlResult { text }))
     }
 }
 
 fn different_bridge() -> Failure {
-    Failure::new("CONFIGURATION", "This process already loaded a different Java bridge. Start another host process to change it.")
+    Failure::new(
+        codes::CONFIGURATION,
+        "This process already loaded a different Java bridge. Start another host process to change it.",
+    )
 }
 
 #[cfg(test)]

@@ -91,7 +91,7 @@ alert_info.value.get_by_role("button", name="Aceptar").click()
 ```python
 import playwright_desktop
 
-playwright_desktop.configure(timeout=15_000, java_home=r"C:\Program Files\Java\jdk-17")
+playwright_desktop.configure(timeout=15000, java_home=r"C:\Program Files\Java\jdk-17")
 ```
 
-También puedes cambiar el timeout de una sesión específica con `dcontext.set_default_timeout(15_000)`.
+También puedes cambiar el timeout de una sesión específica con `dcontext.set_default_timeout(15000)`.

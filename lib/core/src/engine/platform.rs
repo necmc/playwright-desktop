@@ -1,11 +1,19 @@
 use super::{QueuedCommand, RequestState, Shared, coordinator::Worker};
-use crate::error::{Failure, Result};
+use crate::error::{Failure, Result, codes};
 use std::{
-    collections::HashSet,
+    collections::{HashSet, VecDeque},
     hash::Hash,
     sync::{Arc, mpsc::Receiver},
     time::Instant,
 };
+
+#[cfg(windows)]
+const WORKER_THREAD_NAME: &str = "playwright-desktop";
+#[cfg(not(windows))]
+const UNSUPPORTED_PLATFORM_MESSAGE: &str = "This system has no desktop accessibility adapter.";
+const INVALID_QUERY_MESSAGE: &str =
+    "Use an exact title, a title prefix, a PID or visible text. Do not combine the two title filters.";
+pub(super) const WINDOW_NOT_FOUND_MESSAGE: &str = "The native window no longer exists.";
 
 pub(crate) enum ControlAction {
     WaitVisible,
@@ -40,10 +48,7 @@ impl WindowQuery {
         if (!self.title.is_empty() && !self.title_prefix.is_empty())
             || self.title.contains('\0') || self.title_prefix.contains('\0') || self.has_text.contains('\0')
         {
-            return Err(Failure::new(
-                "CONFIGURATION",
-                "Use an exact title, a title prefix, a PID or visible text. Do not combine the two title filters.",
-            ));
+            return Err(Failure::new(codes::CONFIGURATION, INVALID_QUERY_MESSAGE));
         }
         Ok(())
     }
@@ -51,10 +56,7 @@ impl WindowQuery {
     pub(super) fn validate(&self) -> Result<()> {
         self.validate_capture()?;
         if self.title.is_empty() && self.title_prefix.is_empty() && self.pid.is_none() && self.has_text.is_empty() {
-            return Err(Failure::new(
-                "CONFIGURATION",
-                "Use an exact title, a title prefix, a PID or visible text. Do not combine the two title filters.",
-            ));
+            return Err(Failure::new(codes::CONFIGURATION, INVALID_QUERY_MESSAGE));
         }
         Ok(())
     }
@@ -83,7 +85,7 @@ pub(super) struct CapturePreparation {
 pub(super) enum ProviderSelection<P> {
     Ready(P),
     Pending {
-        result: Receiver<Result<P>>,
+        probes: VecDeque<(P, Receiver<Result<bool>>)>,
         until: Instant,
         fallback: P,
     },
@@ -134,7 +136,7 @@ pub fn host_os_language() -> Result<String> {
 
 #[cfg(not(windows))]
 pub fn host_os_language() -> Result<String> {
-    Err(Failure::new("UNSUPPORTED", "This system has no desktop accessibility adapter."))
+    Err(Failure::new(codes::UNSUPPORTED, UNSUPPORTED_PLATFORM_MESSAGE))
 }
 
 #[cfg(windows)]
@@ -144,14 +146,14 @@ pub(super) fn start_host_worker(shared: Arc<Shared>, receiver: Receiver<QueuedCo
 
 #[cfg(not(windows))]
 pub(super) fn start_host_worker(_: Arc<Shared>, _: Receiver<QueuedCommand>) -> Result<()> {
-    Err(Failure::new("UNSUPPORTED", "This system has no desktop accessibility adapter."))
+    Err(Failure::new(codes::UNSUPPORTED, UNSUPPORTED_PLATFORM_MESSAGE))
 }
 
 #[cfg(windows)]
 fn start_worker<P: Platform + 'static>(
     create_platform: fn() -> P, shared: Arc<Shared>, receiver: Receiver<QueuedCommand>,
 ) -> Result<()> {
-    std::thread::Builder::new().name("playwright-desktop".into())
+    std::thread::Builder::new().name(WORKER_THREAD_NAME.into())
         .spawn(move || {
             let state = shared.clone();
             if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -160,6 +162,6 @@ fn start_worker<P: Platform + 'static>(
                 state.poisoned.store(true, std::sync::atomic::Ordering::Release);
             }
         })
-        .map_err(|error| Failure::new("BRIDGE", format!("Cannot start the native worker: {error}")))?;
+        .map_err(|error| Failure::new(codes::BRIDGE, format!("Cannot start the native worker: {error}")))?;
     Ok(())
 }

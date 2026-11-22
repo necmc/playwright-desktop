@@ -1,12 +1,52 @@
-"""Validation shared by synchronous and asynchronous facades."""
+"""Validation and shared native invocation models for sync and async facades."""
 
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
 MAX_TIMEOUT_MS = 2**32 - 1
 MAX_PROCESS_ID = 2**32 - 1
-CLICK_ROLES = ("button", "link", "menuitem")
-SCOPE_ROLES = ("dialog", "group", "pane", "menu", "listitem")
+
+ROLE_TEXT = "text"
+ROLE_TEXTBOX = "textbox"
+ROLE_BUTTON = "button"
+ROLE_LINK = "link"
+ROLE_MENUITEM = "menuitem"
+ROLE_DIALOG = "dialog"
+ROLE_GROUP = "group"
+ROLE_PANE = "pane"
+ROLE_MENU = "menu"
+ROLE_LISTITEM = "listitem"
+
+CLICK_ROLES = (ROLE_BUTTON, ROLE_LINK, ROLE_MENUITEM)
+SCOPE_ROLES = (ROLE_DIALOG, ROLE_GROUP, ROLE_PANE, ROLE_MENU, ROLE_LISTITEM)
+SUPPORTED_ROLES = (ROLE_TEXT, ROLE_TEXTBOX, *CLICK_ROLES, *SCOPE_ROLES)
+
+OP_PREPARE = "prepare"
+OP_CAPTURE = "capture"
+OP_WAIT_VISIBLE = "wait_visible"
+OP_READ_TEXT = "read_text"
+OP_FILL = "fill"
+OP_CLICK = "click"
+OP_WAIT_CLOSED = "wait_closed"
+OP_BRING_TO_FRONT = "bring_to_front"
+OP_CLOSE_WINDOW = "close_window"
+
+
+@dataclass(frozen=True)
+class InvokeParams:
+    operation: str = ""
+    window_id: int = 0
+    capture_id: int = 0
+    title: str = ""
+    pid: int | None = None
+    role: str = ""
+    name: str = ""
+    text: str = ""
+    scope_role: str = ""
+    scope_name: str = ""
+    title_prefix: str = ""
+    has_text: str = ""
+    only_new: bool = False
 
 
 def validate_string(value: str, label: str) -> str:
@@ -82,7 +122,7 @@ def validate_predicate(predicate: Callable[[Any], bool] | None) -> Callable[[Any
 
 
 def validate_control(role: str, name: str) -> None:
-    if role not in ("text", "textbox", *CLICK_ROLES, *SCOPE_ROLES):
+    if role not in SUPPORTED_ROLES:
         raise ValueError("Unsupported desktop role.")
     validate_string(name, "name")
 

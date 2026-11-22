@@ -1,11 +1,11 @@
 pub use crate::config::SessionConfig;
-use crate::error::{Failure, Result};
+use crate::error::{Failure, Result, codes};
 use coordinator::{mutation_timeout_message, timeout_message};
 use platform::{CapturePreparation, Platform};
 pub(crate) use platform::{ControlAction, ControlResult};
 pub use platform::{ControlQuery, WindowQuery, host_os_language};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     sync::{
         Arc, Condvar, Mutex, OnceLock,
         atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering},
@@ -13,6 +13,20 @@ use std::{
     },
     time::{Duration, Instant},
 };
+
+const MAX_QUEUED_REQUESTS: usize = 64;
+const DEFAULT_REQUEST_TIMEOUT_MS: u64 = 10000;
+const STALLED_CALL_GRACE: Duration = Duration::from_millis(100);
+
+const OP_PREPARE: &str = "prepare";
+const OP_CAPTURE: &str = "capture";
+const OP_WAIT_VISIBLE: &str = "wait_visible";
+const OP_READ_TEXT: &str = "read_text";
+const OP_FILL: &str = "fill";
+const OP_CLICK: &str = "click";
+const OP_WAIT_CLOSED: &str = "wait_closed";
+const OP_BRING_TO_FRONT: &str = "bring_to_front";
+const OP_CLOSE_WINDOW: &str = "close_window";
 
 pub(crate) struct SessionState {
     pub(crate) id: u64,
@@ -25,23 +39,23 @@ const MUTATION_STARTED: u8 = 2;
 const REQUEST_EXPIRED: u8 = 4;
 
 pub(crate) fn worker_stopped_failure() -> Failure {
-    Failure::new("BRIDGE", "The native worker stopped. Restart the host process.")
+    Failure::new(codes::BRIDGE, "The native worker stopped. Restart the host process.")
 }
 
 pub(crate) fn engine_unavailable_failure() -> Failure {
-    Failure::new("BRIDGE", "The native engine is unavailable. Restart the host process.")
+    Failure::new(codes::BRIDGE, "The native engine is unavailable. Restart the host process.")
 }
 
 pub(crate) fn shared_engine_unavailable_failure() -> Failure {
     Failure::new(
-        "BRIDGE",
+        codes::BRIDGE,
         "The shared desktop engine is unavailable after a native failure. Restart the host process.",
     )
 }
 
 pub(crate) fn stalled_timeout_failure() -> Failure {
     Failure::new(
-        "TIMEOUT",
+        codes::TIMEOUT,
         "A native bridge call exceeded its deadline; its effect may be unknown. Restart the host process before using desktop actions again.",
     )
 }
@@ -74,7 +88,7 @@ impl RequestState {
             } else {
                 "The desktop request exceeded its deadline."
             };
-            return Err(Failure::new("TIMEOUT", message));
+            return Err(Failure::new(codes::TIMEOUT, message));
         }
         Ok(())
     }
@@ -98,7 +112,7 @@ impl RequestState {
     }
 
     fn cancelled_error() -> Failure {
-        Failure::new("CANCELLED", "The desktop request or its session was cancelled.")
+        Failure::new(codes::CANCELLED, "The desktop request or its session was cancelled.")
     }
 }
 
@@ -173,16 +187,16 @@ enum Operation {
 impl Operation {
     fn parse(name: &str) -> Result<Self> {
         match name {
-            "prepare" => Ok(Self::PrepareCapture),
-            "capture" => Ok(Self::CompleteCapture),
-            "wait_visible" => Ok(Self::Window(WindowOperation::WaitVisible)),
-            "read_text" => Ok(Self::Window(WindowOperation::ReadText)),
-            "fill" => Ok(Self::Window(WindowOperation::Fill)),
-            "click" => Ok(Self::Window(WindowOperation::Click)),
-            "wait_closed" => Ok(Self::Window(WindowOperation::WaitClosed)),
-            "bring_to_front" => Ok(Self::Window(WindowOperation::BringToFront)),
-            "close_window" => Ok(Self::Window(WindowOperation::CloseWindow)),
-            _ => Err(Failure::new("CONFIGURATION", "Unsupported native operation.")),
+            OP_PREPARE => Ok(Self::PrepareCapture),
+            OP_CAPTURE => Ok(Self::CompleteCapture),
+            OP_WAIT_VISIBLE => Ok(Self::Window(WindowOperation::WaitVisible)),
+            OP_READ_TEXT => Ok(Self::Window(WindowOperation::ReadText)),
+            OP_FILL => Ok(Self::Window(WindowOperation::Fill)),
+            OP_CLICK => Ok(Self::Window(WindowOperation::Click)),
+            OP_WAIT_CLOSED => Ok(Self::Window(WindowOperation::WaitClosed)),
+            OP_BRING_TO_FRONT => Ok(Self::Window(WindowOperation::BringToFront)),
+            OP_CLOSE_WINDOW => Ok(Self::Window(WindowOperation::CloseWindow)),
+            _ => Err(Failure::new(codes::CONFIGURATION, "Unsupported native operation.")),
         }
     }
 }
@@ -240,7 +254,7 @@ enum PendingCall<P: Platform> {
     },
     ResolveProvider {
         id: u64,
-        result: Receiver<Result<P::Provider>>,
+        probes: VecDeque<(P::Provider, Receiver<Result<bool>>)>,
         until: Instant,
         fallback: P::Provider,
     },
@@ -274,7 +288,7 @@ impl CoreEngine {
         let mut global = SHARED
             .get_or_init(|| Mutex::new(None))
             .lock()
-            .map_err(|_| Failure::new("BRIDGE", "The engine initialization lock failed."))?;
+            .map_err(|_| Failure::new(codes::BRIDGE, "The engine initialization lock failed."))?;
         if global.is_none() {
             let (sender, receiver) = mpsc::channel();
             let shared = Arc::new(Shared::new(sender));
@@ -303,7 +317,7 @@ impl CoreEngine {
     pub fn new_request(&self, session_id: u64, timeout_ms: u64) -> Result<CoreRequest> {
         self.healthy()?;
         if timeout_ms > u32::MAX as u64 {
-            return Err(Failure::new("CONFIGURATION", "Timeout exceeds the supported range."));
+            return Err(Failure::new(codes::CONFIGURATION, "Timeout exceeds the supported range."));
         }
         let session = self
             .shared
@@ -312,8 +326,8 @@ impl CoreEngine {
             .unwrap()
             .get(&session_id)
             .cloned()
-            .ok_or_else(|| Failure::new("CLOSED", "The desktop session is closed."))?;
-        let timeout = if timeout_ms == 0 { 10_000 } else { timeout_ms };
+            .ok_or_else(|| Failure::new(codes::CLOSED, "The desktop session is closed."))?;
+        let timeout = if timeout_ms == 0 { DEFAULT_REQUEST_TIMEOUT_MS } else { timeout_ms };
         let deadline = Instant::now() + Duration::from_millis(timeout);
         Ok(CoreRequest {
             state: Arc::new(RequestState::new(session, deadline, timeout_ms == 0)),
@@ -324,9 +338,9 @@ impl CoreEngine {
         self.healthy()?;
         request.state.check()?;
         let operation = Operation::parse(&params.operation)?;
-        if self.shared.queued.fetch_add(1, Ordering::AcqRel) >= 64 {
+        if self.shared.queued.fetch_add(1, Ordering::AcqRel) >= MAX_QUEUED_REQUESTS {
             self.shared.queued.fetch_sub(1, Ordering::AcqRel);
-            return Err(Failure::new("BUSY", "The native request queue is full."));
+            return Err(Failure::new(codes::BUSY, "The native request queue is full."));
         }
         let (sender, receiver) = mpsc::channel();
         let command = Command {
@@ -378,9 +392,9 @@ impl Shared {
                 if self.mark_stalled_call() {
                     Err(stalled_timeout_failure())
                 } else if mutation_started {
-                    Err(Failure::new("TIMEOUT", mutation_timeout_message()))
+                    Err(Failure::new(codes::TIMEOUT, mutation_timeout_message()))
                 } else {
-                    Err(Failure::new("TIMEOUT", timeout_message()))
+                    Err(Failure::new(codes::TIMEOUT, timeout_message()))
                 }
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
@@ -427,7 +441,7 @@ impl Shared {
         // same lock covers the final check and the admission of the next native call.
         let (activity, _) = self
             .native_finished
-            .wait_timeout_while(activity, Duration::from_millis(100), |activity| {
+            .wait_timeout_while(activity, STALLED_CALL_GRACE, |activity| {
                 activity.overdue_generation() == Some(generation)
             })
             .unwrap();

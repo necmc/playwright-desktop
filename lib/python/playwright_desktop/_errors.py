@@ -2,6 +2,8 @@
 
 from playwright.sync_api import Error, TimeoutError as PlaywrightTimeoutError
 
+DEFAULT_NATIVE_ERROR_CODE = "ACTION"
+
 
 class DesktopError(Error):
     pass
@@ -60,3 +62,8 @@ NATIVE_ERRORS = {
     "CANCELLED": DesktopClosedError,
     "UNSUPPORTED": UnsupportedPlatformError,
 }
+
+
+def translate_native_error(error: Exception) -> Exception:
+    code, message = error.args if len(error.args) == 2 else (DEFAULT_NATIVE_ERROR_CODE, str(error))
+    return NATIVE_ERRORS.get(code, DesktopError)(message)

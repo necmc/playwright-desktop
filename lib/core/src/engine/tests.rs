@@ -1,10 +1,13 @@
 use super::{*, coordinator::Worker, platform::{CandidateSearch, ProviderSelection}};
+use crate::error::codes;
 use std::{cell::{Cell, RefCell}, collections::VecDeque};
 
 #[derive(Default)]
 struct FakePlatform {
     windows: Vec<(u32, &'static str)>,
     pending_windows: Option<Vec<(u32, &'static str)>>,
+    probe_sequence: Option<Vec<(&'static str, bool)>>,
+    expected_provider: Option<&'static str>,
     actions: usize,
     released: Cell<Option<u64>>,
     brought_to_front: RefCell<Vec<u32>>,
@@ -81,9 +84,14 @@ impl Platform for FakePlatform {
     }
 
     fn resolve_provider(&mut self, request: Arc<RequestState>, _: Self::Window) -> ProviderSelection<Self::Provider> {
-        let (sender, result) = mpsc::channel();
-        sender.send(Ok("fake")).unwrap();
-        ProviderSelection::Pending { result, until: request.deadline, fallback: "fallback" }
+        let sequences = self.probe_sequence.clone().unwrap_or_else(|| vec![("fake", true)]);
+        let mut probes = VecDeque::new();
+        for (id, matched) in sequences {
+            let (sender, receiver) = mpsc::channel();
+            sender.send(Ok(matched)).unwrap();
+            probes.push_back((id, receiver));
+        }
+        ProviderSelection::Pending { probes, until: request.deadline, fallback: "fallback" }
     }
 
     fn act(
@@ -91,7 +99,7 @@ impl Platform for FakePlatform {
         action: ControlAction, query: ControlQuery,
     ) -> Result<Receiver<Result<Option<ControlResult>>>> {
         request.begin_mutation()?;
-        assert_eq!(provider, "fake");
+        assert_eq!(provider, self.expected_provider.unwrap_or("fake"));
         assert_eq!(window.0, 2);
         assert_eq!(query.name, "Aceptar");
         assert!(matches!(action, ControlAction::Click));
@@ -102,7 +110,7 @@ impl Platform for FakePlatform {
     }
 
     fn release(&self, id: u64, provider: Self::Provider) {
-        assert_eq!(provider, "fake");
+        assert_eq!(provider, self.expected_provider.unwrap_or("fake"));
         self.released.set(Some(id));
     }
 
@@ -609,9 +617,45 @@ fn session_config_validates_non_empty_and_nul_free_options() {
         "CONFIGURATION"
     );
     assert_eq!(
-        SessionConfig::automatic().set_option("a\0k", "val").unwrap_err().code,
-        "CONFIGURATION"
+        SessionConfig::automatic().set_option("java.home", "").unwrap_err().code,
+        codes::CONFIGURATION
     );
+    assert_eq!(
+        SessionConfig::automatic().set_option("a\0k", "val").unwrap_err().code,
+        codes::CONFIGURATION
+    );
+}
+
+#[test]
+fn worker_chains_multiple_provider_probes_before_using_fallback() {
+    let mut worker = test_worker();
+    let owner = session(1);
+    worker.shared.sessions.lock().unwrap().insert(owner.id, owner.clone());
+    let deadline = Instant::now() + Duration::from_secs(10);
+
+    worker.platform.windows.push((2, "Multi"));
+    worker.platform.probe_sequence = Some(vec![("first", false), ("second", true)]);
+    worker.platform.expected_provider = Some("second");
+    let (mut cmd_second, _) = command(request(owner.clone(), deadline), Operation::Window(WindowOperation::Click), Arguments {
+        window: WindowQuery { title: "Multi".into(), ..WindowQuery::default() },
+        control: ControlQuery { name: "Aceptar".into(), ..ControlQuery::default() },
+        ..Arguments::default()
+    });
+    assert!(worker.step(&mut cmd_second).unwrap().is_none());
+    assert!(worker.step(&mut cmd_second).unwrap().is_none());
+    assert!(worker.step(&mut cmd_second).unwrap().unwrap().handle > 0);
+    worker.windows.clear();
+
+    worker.platform.probe_sequence = Some(vec![("first", false), ("second", false)]);
+    worker.platform.expected_provider = Some("fallback");
+    let (mut cmd_fallback, _) = command(request(owner, deadline), Operation::Window(WindowOperation::Click), Arguments {
+        window: WindowQuery { title: "Multi".into(), ..WindowQuery::default() },
+        control: ControlQuery { name: "Aceptar".into(), ..ControlQuery::default() },
+        ..Arguments::default()
+    });
+    assert!(worker.step(&mut cmd_fallback).unwrap().is_none());
+    assert!(worker.step(&mut cmd_fallback).unwrap().is_none());
+    assert!(worker.step(&mut cmd_fallback).unwrap().unwrap().handle > 0);
 }
 
 #[cfg(windows)]

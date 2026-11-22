@@ -6,6 +6,16 @@ from typing import Callable, Generic, TypeVar
 
 from ._facade import _DesktopContextBase, _WindowBase, _accept_captured
 from ._models import (
+    OP_BRING_TO_FRONT,
+    OP_CAPTURE,
+    OP_CLICK,
+    OP_CLOSE_WINDOW,
+    OP_FILL,
+    OP_PREPARE,
+    OP_READ_TEXT,
+    OP_WAIT_CLOSED,
+    OP_WAIT_VISIBLE,
+    ROLE_TEXTBOX,
     WindowQuery,
     query_parameters,
     validate_action_role,
@@ -85,16 +95,16 @@ class _AsyncWindow(_WindowBase):
         return reply
 
     async def bring_to_front(self, *, timeout: float | None = None) -> None:
-        await self._call("bring_to_front", timeout)
+        await self._call(OP_BRING_TO_FRONT, timeout)
 
     async def wait_for_closed(self, *, timeout: float | None = None) -> None:
-        await self._call("wait_closed", timeout)
+        await self._call(OP_WAIT_CLOSED, timeout)
 
     def _on_closed(self) -> None:
         pass
 
     async def close(self, *, timeout: float | None = None) -> None:
-        await self._call("close_window", timeout)
+        await self._call(OP_CLOSE_WINDOW, timeout)
         self._on_closed()
 
 
@@ -223,20 +233,20 @@ class Locator:
         return await self._window._call(operation, timeout, role=self._role, name=self._name, **parameters)
 
     async def wait_for(self, *, timeout: float | None = None) -> None:
-        await self._call("wait_visible", timeout)
+        await self._call(OP_WAIT_VISIBLE, timeout)
 
     async def fill(self, text: str, *, timeout: float | None = None) -> None:
-        validate_action_role(self._role, "textbox", "fill")
+        validate_action_role(self._role, ROLE_TEXTBOX, OP_FILL)
         validate_text(text)
-        await self._call("fill", timeout, text=text)
+        await self._call(OP_FILL, timeout, text=text)
 
     async def input_value(self, *, timeout: float | None = None) -> str:
-        validate_action_role(self._role, "textbox", "input_value")
-        return (await self._call("read_text", timeout)).text
+        validate_action_role(self._role, ROLE_TEXTBOX, "input_value")
+        return (await self._call(OP_READ_TEXT, timeout)).text
 
     async def click(self, *, timeout: float | None = None) -> None:
         validate_click_role(self._role)
-        await self._call("click", timeout)
+        await self._call(OP_CLICK, timeout)
 
 
 class AsyncEventInfo(Generic[_T]):
@@ -270,7 +280,7 @@ class _AsyncExpectation(Generic[_T]):
 
     async def __aenter__(self) -> AsyncEventInfo[_T]:
         self._deadline = Deadline(self._timeout)
-        reply = await self._session.call_async("prepare", **query_parameters(self._query), timeout=self._timeout)
+        reply = await self._session.call_async(OP_PREPARE, **query_parameters(self._query), timeout=self._timeout)
         self._capture = reply.handle
         return self._info
 
@@ -279,7 +289,7 @@ class _AsyncExpectation(Generic[_T]):
             self._session.cancel_capture(self._capture)
             return False
         with self._session.capture_completion(self._capture, self._deadline) as remaining:
-            reply = await self._session.call_async("capture", capture_id=self._capture, timeout=remaining)
+            reply = await self._session.call_async(OP_CAPTURE, capture_id=self._capture, timeout=remaining)
             candidate = self._factory(reply)
             self._info._value = _accept_captured(candidate, self._predicate, register=self._register)
         return False

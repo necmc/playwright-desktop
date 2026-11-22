@@ -11,9 +11,9 @@ from ._errors import (
     DesktopConfigurationError,
     DesktopError,
     DesktopTimeoutError,
-    NATIVE_ERRORS,
+    translate_native_error,
 )
-from ._models import validate_timeout
+from ._models import InvokeParams, validate_timeout
 from ._timing import DEFAULT_TIMEOUT_MS, Deadline
 
 _BINDING_TIMEOUT = "The desktop request timed out while initializing its binding."
@@ -120,13 +120,12 @@ def _native_call(function, *args, **kwargs):
         return function(*args, **kwargs)
     except Exception as error:
         if _native_error is not None and isinstance(error, _native_error):
-            code, message = error.args if len(error.args) == 2 else ("ACTION", str(error))
-            raise NATIVE_ERRORS.get(code, DesktopError)(message) from error
+            raise translate_native_error(error) from error
         raise
 
 
 def _invoke(engine, request, operation, parameters):
-    return _native_call(engine.invoke, request, operation, **parameters)
+    return _native_call(engine.invoke, request, InvokeParams(operation=operation, **parameters))
 
 
 class Session:

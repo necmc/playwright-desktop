@@ -166,11 +166,11 @@ class PatchTests(unittest.TestCase):
         from playwright_desktop._models import WindowQuery
 
         self.addCleanup(_runtime.reset_defaults)
-        desktop.configure(java_home="C:/custom-jdk", timeout=4_500)
+        desktop.configure(java_home="C:/custom-jdk", timeout=4500)
         session = _runtime.session_for_context(FakeContext())
         self.addCleanup(session.close_nowait)
         self.assertTrue(session._java_home.endswith("custom-jdk"))
-        self.assertEqual(session.default_timeout, 4_500)
+        self.assertEqual(session.default_timeout, 4500)
 
         open_capture = WindowQuery.capture()
         self.assertTrue(open_capture.allow_empty)

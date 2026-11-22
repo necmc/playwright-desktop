@@ -1,18 +1,19 @@
 use playwright_desktop_core::{
-    ControlQuery, CoreEngine, CoreReply, CoreRequest, Failure, InvokeParams, Result as CoreResult,
-    SessionConfig, WindowQuery, host_os_language, validate_absolute_path,
+    BOOL_TRUE, ControlQuery, CoreEngine, CoreReply, CoreRequest, Failure, InvokeParams,
+    JAVA_EXPLICIT_OPTION, JAVA_HOME_ERROR, JAVA_HOME_OPTION, JAVA_PROVIDER_ID,
+    Result as CoreResult, SessionConfig, WindowQuery, host_os_language, validate_absolute_path,
 };
 use pyo3::prelude::*;
-
-const JAVA_PROVIDER_ID: &str = "jab";
-const JAVA_HOME_OPTION: &str = "java.home";
-const JAVA_EXPLICIT_OPTION: &str = "java.explicit";
-const JAVA_HOME_ERROR: &str = "java_home must be an absolute runtime directory.";
 
 pyo3::create_exception!(_native, NativeError, pyo3::exceptions::PyException);
 
 fn as_python(error: Failure) -> PyErr {
     NativeError::new_err((error.code, error.message))
+}
+
+fn set_java_home(config: &mut SessionConfig, java_home: &str) -> CoreResult<()> {
+    validate_absolute_path(java_home, JAVA_HOME_ERROR)?;
+    config.set_option(JAVA_HOME_OPTION, java_home)
 }
 
 #[pyfunction]
@@ -23,6 +24,47 @@ fn binding_version() -> &'static str {
 #[pyfunction]
 fn os_language() -> PyResult<String> {
     host_os_language().map_err(as_python)
+}
+
+#[derive(FromPyObject)]
+struct PyInvokeParams {
+    operation: String,
+    window_id: u64,
+    capture_id: u64,
+    title: String,
+    pid: Option<u32>,
+    role: String,
+    name: String,
+    text: String,
+    scope_role: String,
+    scope_name: String,
+    title_prefix: String,
+    has_text: String,
+    only_new: bool,
+}
+
+impl From<PyInvokeParams> for InvokeParams {
+    fn from(params: PyInvokeParams) -> Self {
+        Self {
+            operation: params.operation,
+            window_id: params.window_id,
+            capture_id: params.capture_id,
+            window: WindowQuery {
+                title: params.title,
+                pid: params.pid,
+                title_prefix: params.title_prefix,
+                has_text: params.has_text,
+                only_new: params.only_new,
+            },
+            text: params.text,
+            control: ControlQuery {
+                role: params.role,
+                name: params.name,
+                scope_role: params.scope_role,
+                scope_name: params.scope_name,
+            },
+        }
+    }
 }
 
 #[pyclass(name = "Reply")]
@@ -71,13 +113,21 @@ impl PyEngine {
     }
 
     fn open_session(&self, java_home: &str) -> PyResult<u64> {
-        let config = build_java_config(Some(java_home), true, true).map_err(as_python)?;
+        let mut config = SessionConfig::explicit_provider(JAVA_PROVIDER_ID);
+        set_java_home(&mut config, java_home).map_err(as_python)?;
+        config.set_option(JAVA_EXPLICIT_OPTION, BOOL_TRUE).map_err(as_python)?;
         self.0.open_session(config).map_err(as_python)
     }
 
     #[pyo3(signature = (java_home=None, *, explicit=false))]
     fn open_auto_session(&self, java_home: Option<&str>, explicit: bool) -> PyResult<u64> {
-        let config = build_java_config(java_home, explicit, false).map_err(as_python)?;
+        let mut config = SessionConfig::automatic();
+        if let Some(home) = java_home {
+            set_java_home(&mut config, home).map_err(as_python)?;
+            if explicit {
+                config.set_option(JAVA_EXPLICIT_OPTION, BOOL_TRUE).map_err(as_python)?;
+            }
+        }
         self.0.open_session(config).map_err(as_python)
     }
 
@@ -85,48 +135,11 @@ impl PyEngine {
         self.0.new_request(session_id, timeout_ms).map(PyRequest).map_err(as_python)
     }
 
-    #[pyo3(signature = (request, operation, *, window_id=0, capture_id=0, title="", pid=None, role="", name="", text="", scope_role="", scope_name="", title_prefix="", has_text="", only_new=false))]
-    #[allow(clippy::too_many_arguments)]
-    fn invoke(
-        &self,
-        py: Python<'_>,
-        request: &PyRequest,
-        operation: &str,
-        window_id: u64,
-        capture_id: u64,
-        title: &str,
-        pid: Option<u32>,
-        role: &str,
-        name: &str,
-        text: &str,
-        scope_role: &str,
-        scope_name: &str,
-        title_prefix: &str,
-        has_text: &str,
-        only_new: bool,
-    ) -> PyResult<PyReply> {
-        let params = InvokeParams {
-            operation: operation.into(),
-            window_id,
-            capture_id,
-            window: WindowQuery {
-                title: title.into(),
-                pid,
-                title_prefix: title_prefix.into(),
-                has_text: has_text.into(),
-                only_new,
-            },
-            text: text.into(),
-            control: ControlQuery {
-                role: role.into(),
-                name: name.into(),
-                scope_role: scope_role.into(),
-                scope_name: scope_name.into(),
-            },
-        };
+    fn invoke(&self, py: Python<'_>, request: &PyRequest, params: PyInvokeParams) -> PyResult<PyReply> {
         let core = self.0.clone();
         let req = request.0.clone();
-        py.detach(move || core.invoke(&req, params)).map(PyReply::from).map_err(as_python)
+        let core_params = InvokeParams::from(params);
+        py.detach(move || core.invoke(&req, core_params)).map(PyReply::from).map_err(as_python)
     }
 
     fn close_session(&self, session_id: u64) {
@@ -136,26 +149,6 @@ impl PyEngine {
     fn cancel_capture(&self, session_id: u64, capture_id: u64) {
         self.0.cancel_capture(session_id, capture_id);
     }
-}
-
-fn build_java_config(
-    java_home: Option<&str>,
-    explicit: bool,
-    fixed_provider: bool,
-) -> CoreResult<SessionConfig> {
-    let mut config = if fixed_provider {
-        SessionConfig::explicit_provider(JAVA_PROVIDER_ID)
-    } else {
-        SessionConfig::automatic()
-    };
-    if let Some(home) = java_home {
-        validate_absolute_path(home, JAVA_HOME_ERROR)?;
-        config.set_option(JAVA_HOME_OPTION, home)?;
-        if explicit {
-            config.set_option(JAVA_EXPLICIT_OPTION, "true")?;
-        }
-    }
-    Ok(config)
 }
 
 #[pymodule]
