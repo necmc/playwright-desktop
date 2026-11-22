@@ -184,13 +184,13 @@ git commit -m "refactor(rust): separar motor puro de adaptador PyO3 y lenguaje c
     ```
     y `ProviderRegistry` que administra una colección ordenada de proveedores + proveedor fallback (`"uia"`).
 
-- [ ] **Step 1: Escribir tests unitarios para `SessionConfig` y `ProviderRegistry`**
+- [x] **Step 1: Escribir tests unitarios para `SessionConfig` y `ProviderRegistry`**
 
 Agregar tests en `lib/rust/src/engine/tests.rs` (y/o módulo de pruebas en `providers.rs`):
 1. `session_config_validates_non_empty_and_nul_free_options`: verifica inserción/lectura de claves genéricas (`"java.home"`, etc.) y rechazo de valores inválidos con código `"CONFIGURATION"`.
 2. `provider_registry_selects_first_matching_provider_and_falls_back_on_error`: prueba con proveedores falsos (`FakeWindowProvider`) que un error del primer proveedor en modo automático recurre al fallback sin abortar la acción, y que en modo explícito selecciona solo al proveedor solicitado.
 
-- [ ] **Step 2: Ejecutar `cargo test` para verificar el fallo inicial**
+- [x] **Step 2: Ejecutar `cargo test` para verificar el fallo inicial**
 
 Run:
 ```powershell
@@ -198,7 +198,7 @@ Run:
 ```
 Expected: FAIL porque aún no existen `SessionConfig` ni `ProviderRegistry`.
 
-- [ ] **Step 3: Implementar `SessionConfig` en `config.rs`, actualizar `backend.rs`/`bindings_py.rs` y crear `ProviderRegistry` en `providers.rs`**
+- [x] **Step 3: Implementar `SessionConfig` en `config.rs`, actualizar `backend.rs`/`bindings_py.rs` y crear `ProviderRegistry` en `providers.rs`**
 
 1. Crear `lib/rust/src/config.rs` con `SessionConfig` y `SelectionMode`.
 2. Reemplazar `SessionOptions` en `engine.rs`, `backend.rs`, `windows_platform.rs` por `SessionConfig`:
@@ -207,7 +207,7 @@ Expected: FAIL porque aún no existen `SessionConfig` ni `ProviderRegistry`.
 3. Crear `lib/rust/src/engine/providers.rs` definiendo `trait WindowsAccessibilityProvider`, `JavaProviderAdapter` (sobre `Lane<Java>`), `UiaProviderAdapter` (sobre `Lane<Uia>`) y `ProviderRegistry`.
 4. Refactorizar `WindowsPlatform` en `lib/rust/src/engine/windows_platform.rs` para usar `ProviderRegistry` sin enumeraciones cerradas `match WindowsProvider`, manteniendo los tests existentes de aislamiento de hilos en `windows_platform::tests`.
 
-- [ ] **Step 4: Ejecutar `cargo test` para verificar que pasan todos los tests de proveedores y configuración**
+- [x] **Step 4: Ejecutar `cargo test` para verificar que pasan todos los tests de proveedores y configuración**
 
 Run:
 ```powershell
@@ -215,7 +215,7 @@ Run:
 ```
 Expected: PASS.
 
-- [ ] **Step 5: Commit de abstracción de configuración y proveedores**
+- [x] **Step 5: Commit de abstracción de configuración y proveedores**
 
 ```bash
 git add lib/rust/src/

@@ -1,12 +1,19 @@
 //! Windows desktop access for the Java Access Bridge backend.
 
 use crate::{
-    engine::{ControlAction, ControlResult, RequestState, SessionOptions},
+    config::{ProviderId, SessionConfig, validate_absolute_path},
+    engine::{ControlAction, ControlResult, RequestState},
     error::{Failure, Result},
     jab::{Object, loader::{Library, dll_path}},
     windows::{self, WindowState},
 };
 use std::{collections::HashSet, path::PathBuf, rc::Rc};
+
+pub(crate) const JAVA_PROVIDER_ID: ProviderId = "jab";
+pub(crate) const JAVA_HOME_OPTION: &str = "java.home";
+pub(crate) const JAVA_EXPLICIT_OPTION: &str = "java.explicit";
+
+const JAVA_HOME_ERROR: &str = "java_home must be an absolute runtime directory.";
 
 struct LoadedBridge {
     path: PathBuf,
@@ -25,8 +32,9 @@ pub(crate) struct Target {
 }
 
 impl Backend {
-    pub(crate) fn validate_loaded_bridge(&self, options: &SessionOptions) -> Result<()> {
-        if let (Some(bridge), Some(home)) = (&self.bridge, options.java_home.as_deref()) {
+    pub(crate) fn validate_loaded_bridge(&self, config: &SessionConfig) -> Result<()> {
+        if let (Some(bridge), Some(home)) = (&self.bridge, config.option(JAVA_HOME_OPTION)) {
+            validate_absolute_path(home, JAVA_HOME_ERROR)?;
             if dll_path(home).is_ok_and(|path| path != bridge.path) {
                 return Err(different_bridge());
             }
@@ -35,19 +43,20 @@ impl Backend {
     }
 
     pub(crate) fn prepare_session(
-        &mut self, session_id: u64, options: &SessionOptions, check: &dyn Fn() -> Result<()>,
+        &mut self, session_id: u64, config: &SessionConfig, check: &dyn Fn() -> Result<()>,
     ) -> Result<()> {
         if self.validated_sessions.contains(&session_id) {
             return Ok(());
         }
         check()?;
-        let Some(java_home) = options.java_home.as_deref() else {
+        let Some(java_home) = config.option(JAVA_HOME_OPTION) else {
             return if self.bridge.is_some() {
                 Ok(())
             } else {
                 Err(Failure::new("BRIDGE", "Set JAVA_HOME or configure the Java runtime for Java Access Bridge."))
             };
         };
+        validate_absolute_path(java_home, JAVA_HOME_ERROR)?;
         let path = dll_path(java_home)?;
         check()?;
         if let Some(bridge) = &self.bridge {
@@ -133,7 +142,7 @@ impl Target {
 }
 
 fn different_bridge() -> Failure {
-    Failure::new("CONFIGURATION", "This process already loaded a different Java bridge. Start another Python process to change it.")
+    Failure::new("CONFIGURATION", "This process already loaded a different Java bridge. Start another host process to change it.")
 }
 
 #[cfg(test)]

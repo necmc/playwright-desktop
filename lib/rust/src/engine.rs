@@ -1,3 +1,4 @@
+pub use crate::config::SessionConfig;
 use crate::error::{Failure, Result};
 use coordinator::{mutation_timeout_message, timeout_message};
 use platform::{CapturePreparation, Platform};
@@ -5,7 +6,6 @@ pub(crate) use platform::{ControlAction, ControlResult};
 pub use platform::{ControlQuery, WindowQuery};
 use std::{
     collections::{HashMap, HashSet},
-    path::Path,
     sync::{
         Arc, Condvar, Mutex, OnceLock,
         atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering},
@@ -17,43 +17,7 @@ use std::{
 pub(crate) struct SessionState {
     pub(crate) id: u64,
     closed: AtomicBool,
-    pub(crate) options: SessionOptions,
-}
-
-/// Session settings accepted by the core engine. Only the Windows adapter
-/// interprets the Java settings when choosing or preparing a provider.
-#[derive(Clone)]
-pub struct SessionOptions {
-    pub(crate) java_home: Option<String>,
-    pub(crate) automatic: bool,
-    pub(crate) explicit_java_home: bool,
-}
-
-impl SessionOptions {
-    pub fn java(java_home: &str) -> Result<Self> {
-        if java_home.is_empty() || java_home.contains('\0') || !Path::new(java_home).is_absolute() {
-            return Err(Failure::new("CONFIGURATION", "java_home must be an absolute runtime directory."));
-        }
-        Ok(Self {
-            java_home: Some(java_home.into()),
-            automatic: false,
-            explicit_java_home: true,
-        })
-    }
-
-    pub fn automatic(java_home: Option<&str>, explicit: bool) -> Result<Self> {
-        let mut options = match java_home {
-            Some(java_home) => Self::java(java_home)?,
-            None => Self {
-                java_home: None,
-                automatic: true,
-                explicit_java_home: false,
-            },
-        };
-        options.automatic = true;
-        options.explicit_java_home = explicit && java_home.is_some();
-        Ok(options)
-    }
+    pub(crate) config: SessionConfig,
 }
 
 const REQUEST_CANCELLED: u8 = 1;
@@ -322,7 +286,7 @@ impl CoreEngine {
         })
     }
 
-    pub fn open_session(&self, options: SessionOptions) -> Result<u64> {
+    pub fn open_session(&self, config: SessionConfig) -> Result<u64> {
         self.healthy()?;
         let id = self.shared.next.fetch_add(1, Ordering::Relaxed);
         self.shared.sessions.lock().unwrap().insert(
@@ -330,7 +294,7 @@ impl CoreEngine {
             Arc::new(SessionState {
                 id,
                 closed: AtomicBool::new(false),
-                options,
+                config,
             }),
         );
         Ok(id)
@@ -477,6 +441,8 @@ impl Shared {
 
 mod coordinator;
 mod platform;
+#[cfg(windows)]
+mod providers;
 #[cfg(windows)]
 mod windows_platform;
 

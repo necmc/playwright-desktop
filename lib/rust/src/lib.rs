@@ -3,6 +3,7 @@ use pyo3::prelude::*;
 #[cfg(windows)]
 mod backend;
 mod bindings_py;
+mod config;
 mod engine;
 mod error;
 #[cfg(windows)]

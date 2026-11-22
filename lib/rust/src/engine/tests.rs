@@ -114,7 +114,7 @@ fn session(id: u64) -> Arc<SessionState> {
     Arc::new(SessionState {
         id,
         closed: AtomicBool::new(false),
-        options: SessionOptions::automatic(None, false).unwrap(),
+        config: SessionConfig::automatic(),
     })
 }
 
@@ -583,4 +583,33 @@ fn invoke_params_rejects_unknown_operation_without_python_context() {
     let params = crate::engine::InvokeParams::default();
     assert!(params.operation.is_empty());
     assert_eq!(params.window_id, 0);
+}
+
+#[test]
+fn session_config_validates_non_empty_and_nul_free_options() {
+    use crate::config::{SelectionMode, SessionConfig};
+
+    let auto = SessionConfig::automatic();
+    assert_eq!(auto.mode, SelectionMode::Automatic);
+    assert!(auto.option("java.home").is_none());
+
+    let mut explicit = SessionConfig::explicit_provider("jab");
+    explicit.set_option("java.home", r"C:\jdk").unwrap();
+    explicit.set_option("java.explicit", "true").unwrap();
+    assert_eq!(explicit.mode, SelectionMode::ExplicitProvider("jab"));
+    assert_eq!(explicit.option("java.home"), Some(r"C:\jdk"));
+    assert!(explicit.flag("java.explicit"));
+
+    assert_eq!(
+        SessionConfig::automatic().set_option("", "val").unwrap_err().code,
+        "CONFIGURATION"
+    );
+    assert_eq!(
+        SessionConfig::automatic().set_option("java.home", "a\0b").unwrap_err().code,
+        "CONFIGURATION"
+    );
+    assert_eq!(
+        SessionConfig::automatic().set_option("a\0k", "val").unwrap_err().code,
+        "CONFIGURATION"
+    );
 }

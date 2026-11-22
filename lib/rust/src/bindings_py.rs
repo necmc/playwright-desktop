@@ -1,6 +1,12 @@
-use crate::engine::{ControlQuery, CoreEngine, CoreReply, CoreRequest, InvokeParams, SessionOptions, WindowQuery};
+use crate::config::{SessionConfig, validate_absolute_path};
+use crate::engine::{ControlQuery, CoreEngine, CoreReply, CoreRequest, InvokeParams, WindowQuery};
 use crate::error::Failure;
 use pyo3::prelude::*;
+
+const JAVA_PROVIDER_ID: &str = "jab";
+const JAVA_HOME_OPTION: &str = "java.home";
+const JAVA_EXPLICIT_OPTION: &str = "java.explicit";
+const JAVA_HOME_ERROR: &str = "java_home must be an absolute runtime directory.";
 
 pyo3::create_exception!(_native, NativeError, pyo3::exceptions::PyException);
 
@@ -59,14 +65,14 @@ impl PyEngine {
     }
 
     fn open_session(&self, java_home: &str) -> PyResult<u64> {
-        let options = SessionOptions::java(java_home).map_err(as_python)?;
-        self.0.open_session(options).map_err(as_python)
+        let config = build_java_config(Some(java_home), true, true).map_err(as_python)?;
+        self.0.open_session(config).map_err(as_python)
     }
 
     #[pyo3(signature = (java_home=None, *, explicit=false))]
     fn open_auto_session(&self, java_home: Option<&str>, explicit: bool) -> PyResult<u64> {
-        let options = SessionOptions::automatic(java_home, explicit).map_err(as_python)?;
-        self.0.open_session(options).map_err(as_python)
+        let config = build_java_config(java_home, explicit, false).map_err(as_python)?;
+        self.0.open_session(config).map_err(as_python)
     }
 
     fn new_request(&self, session_id: u64, timeout_ms: u64) -> PyResult<PyRequest> {
@@ -124,6 +130,26 @@ impl PyEngine {
     fn cancel_capture(&self, session_id: u64, capture_id: u64) {
         self.0.cancel_capture(session_id, capture_id);
     }
+}
+
+fn build_java_config(
+    java_home: Option<&str>,
+    explicit: bool,
+    fixed_provider: bool,
+) -> crate::error::Result<SessionConfig> {
+    let mut config = if fixed_provider {
+        SessionConfig::explicit_provider(JAVA_PROVIDER_ID)
+    } else {
+        SessionConfig::automatic()
+    };
+    if let Some(home) = java_home {
+        validate_absolute_path(home, JAVA_HOME_ERROR)?;
+        config.set_option(JAVA_HOME_OPTION, home)?;
+        if explicit {
+            config.set_option(JAVA_EXPLICIT_OPTION, "true")?;
+        }
+    }
+    Ok(config)
 }
 
 pub fn init_module(module: &Bound<'_, PyModule>) -> PyResult<()> {
