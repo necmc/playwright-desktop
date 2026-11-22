@@ -128,6 +128,16 @@ pub(super) trait Platform {
 }
 
 #[cfg(windows)]
+pub fn host_os_language() -> Result<String> {
+    Ok(crate::windows::host_os_language())
+}
+
+#[cfg(not(windows))]
+pub fn host_os_language() -> Result<String> {
+    Err(Failure::new("UNSUPPORTED", "This system has no desktop accessibility adapter."))
+}
+
+#[cfg(windows)]
 pub(super) fn start_host_worker(shared: Arc<Shared>, receiver: Receiver<QueuedCommand>) -> Result<()> {
     start_worker(super::windows_platform::WindowsPlatform::default, shared, receiver)
 }

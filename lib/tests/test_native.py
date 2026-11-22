@@ -96,6 +96,12 @@ class NativeTests(unittest.TestCase):
                     self.engine.invoke(request, operation)
                 self.assertEqual(error.exception.args[0], "CONFIGURATION")
 
+    def test_os_language_returns_non_empty_bcp47_tag(self):
+        tag = self.native.os_language()
+        self.assertIsInstance(tag, str)
+        self.assertTrue(tag)
+        self.assertNotIn("_", tag)
+
 
 if __name__ == "__main__":
     unittest.main()

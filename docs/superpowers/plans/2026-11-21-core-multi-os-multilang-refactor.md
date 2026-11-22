@@ -245,7 +245,7 @@ git commit -m "refactor(core): generalizar configuración por proveedor y regist
   - En Python (`_native`): `def os_language() -> str`.
   - En Python (`_platform.py`): `os_language() -> str` consulta `_backend.os_language()` (carga perezosa de `_native`), usando fallback `locale.getlocale()` cuando la plataforma no soporta extensión nativa o en entornos unitarios sin binario compilado.
 
-- [ ] **Step 1: Escribir tests de `os_language()` en Rust (`test_native.py` / `tests.rs`) y verificar carga perezosa en Python**
+- [x] **Step 1: Escribir tests de `os_language()` en Rust (`test_native.py` / `tests.rs`) y verificar carga perezosa en Python**
 
 1. En `lib/rust/src/engine/tests.rs` (bajo `#[cfg(windows)]`):
    ```rust
@@ -266,7 +266,7 @@ git commit -m "refactor(core): generalizar configuración por proveedor y regist
    ```
 3. En `lib/tests/test_api.py`: verificar que `playwright_desktop.os_language()` retorna el resultado de `_backend.os_language()` sin usar `ctypes` directamente, y que `test_patch.py::test_install_and_reload_are_idempotent_and_native_import_is_lazy` sigue verificando que `import playwright_desktop` NO carga `_native`.
 
-- [ ] **Step 2: Ejecutar `cargo test` para verificar el fallo inicial**
+- [x] **Step 2: Ejecutar `cargo test` para verificar el fallo inicial**
 
 Run:
 ```powershell
@@ -274,7 +274,7 @@ Run:
 ```
 Expected: FAIL porque aún no existe `windows::host_os_language()`.
 
-- [ ] **Step 3: Implementar `host_os_language()` en Rust y delegar desde `_backend.py` / `_platform.py`**
+- [x] **Step 3: Implementar `host_os_language()` en Rust y delegar desde `_backend.py` / `_platform.py`**
 
 1. En `lib/rust/Cargo.toml`: añadir feature `"Win32_Globalization"` dentro de `[target.'cfg(windows)'.dependencies] windows.features`.
 2. En `lib/rust/src/windows.rs`: implementar `pub fn host_os_language() -> String` llamando `GetUserDefaultUILanguage` y `LCIDToLocaleName` de `::windows::Win32::Globalization`, devolviendo `"en"` si falla o queda vacío.
@@ -283,7 +283,7 @@ Expected: FAIL porque aún no existe `windows::host_os_language()`.
 5. En `_backend.py`: agregar `def os_language() -> str` con importación perezosa de `_native` (`load_native()`).
 6. En `_platform.py`: reemplazar la llamada directa a `ctypes.windll.kernel32` por delegación en `_backend.os_language()`, capturando `UnsupportedPlatformError` / ausencia de `_native` para conservar el fallback seguro a `locale.getlocale()`.
 
-- [ ] **Step 4: Recompilar wheel y ejecutar `cargo test` + `test_native.py` + `test_api.py` + `test_patch.py`**
+- [x] **Step 4: Recompilar wheel y ejecutar `cargo test` + `test_native.py` + `test_api.py` + `test_patch.py`**
 
 Run:
 ```powershell
@@ -293,7 +293,7 @@ Run:
 Luego instalar el wheel en carpeta temporal y ejecutar `unittest` sobre `test_native.py`, `test_api.py` y `test_patch.py`.
 Expected: PASS 100%, manteniendo `playwright_desktop._native` sin cargar al hacer `import playwright_desktop`.
 
-- [ ] **Step 5: Commit del traslado de `os_language()` al núcleo**
+- [x] **Step 5: Commit del traslado de `os_language()` al núcleo**
 
 ```bash
 git add lib/rust/ lib/python/playwright_desktop/ lib/tests/

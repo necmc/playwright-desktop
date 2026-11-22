@@ -1,11 +1,10 @@
 """Compatibility checks and OS locale utilities for Playwright Desktop."""
 
-import ctypes
 import locale
 import sys
 import sysconfig
 
-from ._errors import UnsupportedPlatformError
+from ._errors import DesktopError, UnsupportedPlatformError
 
 
 def require_supported_platform() -> None:
@@ -20,11 +19,13 @@ def require_supported_platform() -> None:
 
 def os_language() -> str:
     """Return the active OS UI display language tag in BCP-47 form (e.g. 'es-ES', 'en-US')."""
-    if sys.platform == "win32":
-        kernel32 = ctypes.windll.kernel32
-        lang_id = kernel32.GetUserDefaultUILanguage()
-        buffer = ctypes.create_unicode_buffer(85)
-        if kernel32.LCIDToLocaleName(lang_id, buffer, len(buffer), 0) > 0 and buffer.value:
-            return buffer.value
+    from . import _backend
+
+    try:
+        tag = _backend.os_language()
+        if tag:
+            return tag
+    except (UnsupportedPlatformError, DesktopError):
+        pass
     lang, _ = locale.getlocale()
     return lang.replace("_", "-") if lang else "en"

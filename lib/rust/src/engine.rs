@@ -3,7 +3,7 @@ use crate::error::{Failure, Result};
 use coordinator::{mutation_timeout_message, timeout_message};
 use platform::{CapturePreparation, Platform};
 pub(crate) use platform::{ControlAction, ControlResult};
-pub use platform::{ControlQuery, WindowQuery};
+pub use platform::{ControlQuery, WindowQuery, host_os_language};
 use std::{
     collections::{HashMap, HashSet},
     sync::{

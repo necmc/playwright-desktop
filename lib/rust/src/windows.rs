@@ -1,5 +1,6 @@
 use crate::error::{Failure, Result};
 use ::windows::Win32::Foundation::{CloseHandle, HWND, LPARAM, NO_ERROR, SetLastError, WPARAM};
+use ::windows::Win32::Globalization::{GetUserDefaultUILanguage, LCIDToLocaleName};
 use ::windows::Win32::System::Threading::{
     OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
 };
@@ -142,4 +143,25 @@ pub fn pump() {
             DispatchMessageW(&message);
         }
     }
+}
+
+pub fn host_os_language() -> String {
+    const LOCALE_NAME_MAX_LENGTH: usize = 85;
+    // SAFETY: GetUserDefaultUILanguage has no preconditions and LCIDToLocaleName writes into our fixed UTF-16 buffer.
+    unsafe {
+        let lang_id = u32::from(GetUserDefaultUILanguage());
+        let mut buffer = [0u16; LOCALE_NAME_MAX_LENGTH];
+        let written = LCIDToLocaleName(lang_id, Some(&mut buffer), 0);
+        if written > 0 {
+            let slice = &buffer[..(written as usize).min(buffer.len())];
+            let end = slice.iter().position(|&unit| unit == 0).unwrap_or(slice.len());
+            if let Ok(tag) = String::from_utf16(&slice[..end]) {
+                let normalized = tag.trim().replace('_', "-");
+                if !normalized.is_empty() {
+                    return normalized;
+                }
+            }
+        }
+    }
+    "en".into()
 }

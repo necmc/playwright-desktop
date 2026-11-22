@@ -16,6 +16,7 @@ pyo3 = { version = "=0.30.1", features = ["abi3-py310"] }
 windows = { version = "=0.62.2", default-features = false, features = [
     "std",
     "Win32_Foundation",
+    "Win32_Globalization",
     "Win32_System_Com",
     "Win32_System_LibraryLoader",
     "Win32_System_Ole",

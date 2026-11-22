@@ -4,7 +4,7 @@ from importlib import import_module
 import os
 from pathlib import Path
 
-from ._errors import DesktopError
+from ._errors import DesktopError, NATIVE_ERRORS
 from ._platform import require_supported_platform
 
 def load_extension():
@@ -13,6 +13,15 @@ def load_extension():
         return import_module("playwright_desktop._native")
     except ImportError as error:
         raise DesktopError("The native extension is not installed. Build and install the playwright-desktop wheel.") from error
+
+
+def os_language() -> str:
+    native = load_extension()
+    try:
+        return native.os_language()
+    except native.NativeError as error:
+        code, message = error.args
+        raise NATIVE_ERRORS.get(code, DesktopError)(message) from None
 
 
 def normalize_java_home(java_home: str | os.PathLike[str]) -> str:

@@ -255,6 +255,7 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(opened.context.apps, ())
 
     def test_os_language_returns_bcp47_and_is_exposed_on_desktop_context(self):
+        self.assertFalse(hasattr(_platform, "ctypes"))
         page = FakePage()
         session = _runtime.session_for_context(page.context)
         self.addCleanup(session.close_nowait)
@@ -263,7 +264,18 @@ class ApiTests(unittest.TestCase):
         lang = playwright_desktop.os_language()
         self.assertIsInstance(lang, str)
         self.assertTrue(len(lang) >= 2)
+        self.assertNotIn("_", lang)
         self.assertEqual(dcontext.os_language, lang)
+
+        with patch.object(_backend, "os_language", return_value="fr-FR"):
+            self.assertEqual(playwright_desktop.os_language(), "fr-FR")
+            self.assertEqual(dcontext.os_language, "fr-FR")
+
+        with (
+            patch.object(_backend, "os_language", side_effect=DesktopError("missing")),
+            patch.object(_platform.locale, "getlocale", return_value=("es_PE", "UTF-8")),
+        ):
+            self.assertEqual(playwright_desktop.os_language(), "es-PE")
 
         with (
             patch.object(_platform.sys, "platform", "linux"),

@@ -1,5 +1,5 @@
 use crate::config::{SessionConfig, validate_absolute_path};
-use crate::engine::{ControlQuery, CoreEngine, CoreReply, CoreRequest, InvokeParams, WindowQuery};
+use crate::engine::{ControlQuery, CoreEngine, CoreReply, CoreRequest, InvokeParams, WindowQuery, host_os_language};
 use crate::error::Failure;
 use pyo3::prelude::*;
 
@@ -17,6 +17,11 @@ fn as_python(error: Failure) -> PyErr {
 #[pyfunction]
 fn binding_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
+}
+
+#[pyfunction]
+fn os_language() -> PyResult<String> {
+    host_os_language().map_err(as_python)
 }
 
 #[pyclass(name = "Reply")]
@@ -154,6 +159,7 @@ fn build_java_config(
 
 pub fn init_module(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(binding_version, module)?)?;
+    module.add_function(wrap_pyfunction!(os_language, module)?)?;
     module.add("NativeError", module.py().get_type::<NativeError>())?;
     module.add_class::<PyEngine>()?;
     module.add_class::<PyRequest>()?;

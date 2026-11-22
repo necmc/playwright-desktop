@@ -613,3 +613,14 @@ fn session_config_validates_non_empty_and_nul_free_options() {
         "CONFIGURATION"
     );
 }
+
+#[cfg(windows)]
+#[test]
+fn host_os_language_returns_non_empty_bcp47_tag() {
+    let direct = crate::windows::host_os_language();
+    let via_engine = crate::engine::host_os_language().expect("windows host_os_language should succeed");
+    assert!(!direct.is_empty());
+    assert!(!direct.contains('_'));
+    assert!(!direct.contains('\0'));
+    assert_eq!(direct, via_engine);
+}
