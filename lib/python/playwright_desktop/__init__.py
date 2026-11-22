@@ -1,6 +1,11 @@
 """Native desktop interactions for Playwright Python."""
 
-__version__ = "0.1.0"
+from importlib.metadata import PackageNotFoundError as _PackageNotFoundError, version as _package_version
+
+try:
+    __version__ = _package_version("playwright-desktop")
+except _PackageNotFoundError:
+    __version__ = "0.0.0"
 
 from ._errors import (
     AmbiguousMatchError, BridgeUnavailableError, DesktopActionError, DesktopBusyError,

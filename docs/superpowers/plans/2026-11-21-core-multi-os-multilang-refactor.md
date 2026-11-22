@@ -328,8 +328,8 @@ git commit -m "refactor(core): mover detección de idioma del SO al núcleo nati
     members = ["core", "bindings/python"]
     resolver = "3"
     ```
-  - `lib/core/Cargo.toml`: `name = "playwright-desktop-core"`, `version = "0.1.0"`, `edition = "2024"`, `rust-version = "1.85"`, sin `pyo3`, con `[target.'cfg(windows)'.dependencies] windows = "=0.62.2"`.
-  - `lib/bindings/python/Cargo.toml`: `name = "playwright-desktop-py"`, `version = "0.1.0"`, `edition = "2024"`, `[lib] name = "_native"`, `crate-type = ["cdylib"]`, `dependencies = { pyo3 = ..., playwright-desktop-core = { path = "../../core" } }`.
+  - `lib/core/Cargo.toml`: `name = "playwright-desktop-core"`, `edition = "2024"`, `rust-version = "1.85"`, sin `pyo3`, con `[target.'cfg(windows)'.dependencies] windows = "=0.62.2"`.
+  - `lib/bindings/python/Cargo.toml`: `name = "playwright-desktop-py"`, `edition = "2024"`, `[lib] name = "_native"`, `crate-type = ["cdylib"]`, `dependencies = { pyo3 = ..., playwright-desktop-core = { path = "../../core" } }`.
   - `lib/pyproject.toml`: `readme = "python/README.md"`, `manifest-path = "bindings/python/Cargo.toml"`.
 
 - [ ] **Step 1: Verificar el estado previo de pruebas antes de mover crates**
@@ -357,8 +357,7 @@ Confirmar el punto de partida con `cargo test --manifest-path lib/rust/Cargo.tom
    - Actualizar rutas de limpieza/target de `'rust/target/python'` a `'target/python'`.
    - Ejecutar `maturin build --release --locked --target-dir target/python --out dist/python` y `maturin sdist --manifest-path bindings/python/Cargo.toml --out dist/python` (verificando previamente que el `.tar.gz` resultante empaquete todo el workspace de `lib/`: `Cargo.toml`, `Cargo.lock`, `core/**`, `bindings/python/**`, `python/README.md` y `python/playwright_desktop/**`).
 3. `.github/workflows/publish-pypi.yml`:
-   - Actualizar validación SemVer para comprobar `lib/pyproject.toml`, `lib/core/Cargo.toml`, `lib/bindings/python/Cargo.toml` y `lib/python/playwright_desktop/__init__.py`.
-   - Actualizar `Swatinem/rust-cache@v2` (`workspaces: lib`), `cargo test --manifest-path lib/Cargo.toml --workspace --locked`, `$env:PYTHONPATH = "$tmp;lib/python/tests"` y `python -B -m unittest discover -s lib/python/tests -v`.
+   - Actualizar rutas al workspace (`lib/Cargo.toml`, `Swatinem/rust-cache@v2` con `workspaces: lib`, `cargo test --manifest-path lib/Cargo.toml --workspace --locked`) y la ruta de pruebas Python (`$env:PYTHONPATH = "$tmp;lib/python/tests"` y `python -B -m unittest discover -s lib/python/tests -v`).
 
 - [ ] **Step 5: Verificar compilación independiente de `core`, árbol de dependencias, `build_py.ps1` e integridad de `.whl` y `.tar.gz`**
 
@@ -370,7 +369,7 @@ Run:
 ```
 Validar además:
 - La salida de `cargo tree -p playwright-desktop-core` NO contiene `pyo3`.
-- `tarfile.open('lib/dist/python/playwright_desktop-0.1.0.tar.gz')` contiene `Cargo.toml`, `Cargo.lock`, `core/Cargo.toml`, `core/src/lib.rs`, `bindings/python/Cargo.toml`, `bindings/python/src/lib.rs`, `python/README.md` y `python/playwright_desktop/__init__.py`.
+- `lib/dist/python/playwright_desktop-*.tar.gz` contiene `Cargo.toml`, `Cargo.lock`, `core/Cargo.toml`, `core/src/lib.rs`, `bindings/python/Cargo.toml`, `bindings/python/src/lib.rs`, `python/README.md` y `python/playwright_desktop/__init__.py`.
 - El `.whl` generado incluye la metadata de `python/README.md` y NO incluye archivos de `tests/`.
 Expected: PASS en todas las comprobaciones.
 

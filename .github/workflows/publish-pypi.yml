@@ -34,16 +34,10 @@ jobs:
           }
           $tagVersion = $tag -replace '^v', ''
 
-          $pyproject = Get-Content -Raw 'lib/pyproject.toml'
           $cargo = Get-Content -Raw 'lib/rust/Cargo.toml'
-          $initPy = Get-Content -Raw 'lib/python/playwright_desktop/__init__.py'
-
-          $pyVersion = if ($pyproject -match '(?m)^version\s*=\s*"([^"]+)"') { $Matches[1] } else { '' }
           $cargoVersion = if ($cargo -match '(?m)^version\s*=\s*"([^"]+)"') { $Matches[1] } else { '' }
-          $initVersion = if ($initPy -match '(?m)^__version__\s*=\s*"([^"]+)"') { $Matches[1] } else { '' }
-
-          if ($pyVersion -ne $tagVersion -or $cargoVersion -ne $tagVersion -or $initVersion -ne $tagVersion) {
-            throw "Las versiones no coinciden con la etiqueta '$tagVersion': lib/pyproject.toml='$pyVersion', lib/rust/Cargo.toml='$cargoVersion', __init__.py='$initVersion'."
+          if ($cargoVersion -ne $tagVersion) {
+            throw "La versión en lib/rust/Cargo.toml ('$cargoVersion') no coincide con la etiqueta '$tagVersion'."
           }
           Write-Host "Versión SemVer verificada: $tagVersion"
 
