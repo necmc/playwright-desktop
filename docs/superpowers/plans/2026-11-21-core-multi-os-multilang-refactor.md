@@ -332,25 +332,25 @@ git commit -m "refactor(core): mover detección de idioma del SO al núcleo nati
   - `lib/bindings/python/Cargo.toml`: `name = "playwright-desktop-py"`, `edition = "2024"`, `[lib] name = "_native"`, `crate-type = ["cdylib"]`, `dependencies = { pyo3 = ..., playwright-desktop-core = { path = "../../core" } }`.
   - `lib/pyproject.toml`: `readme = "python/README.md"`, `manifest-path = "bindings/python/Cargo.toml"`.
 
-- [ ] **Step 1: Verificar el estado previo de pruebas antes de mover crates**
+- [x] **Step 1: Verificar el estado previo de pruebas antes de mover crates**
 
 Confirmar el punto de partida con `cargo test --manifest-path lib/rust/Cargo.toml --locked`.
 
-- [ ] **Step 2: Crear manifiestos del Cargo Workspace (`lib/Cargo.toml`, `lib/core/Cargo.toml`, `lib/bindings/python/Cargo.toml`)**
+- [x] **Step 2: Crear manifiestos del Cargo Workspace (`lib/Cargo.toml`, `lib/core/Cargo.toml`, `lib/bindings/python/Cargo.toml`)**
 
 1. Crear `lib/Cargo.toml` declarando los dos miembros (`"core"`, `"bindings/python"`).
 2. Crear `lib/core/Cargo.toml` sin dependencia `pyo3` (`crate-type = ["rlib"]`) y trasladar la sección `[target.'cfg(windows)'.dependencies]` y `[profile.release]` a nivel raíz/workspace según corresponda para Cargo.
 3. Crear `lib/bindings/python/Cargo.toml` con `[lib] name = "_native"`, `crate-type = ["cdylib"]`, dependencia a `pyo3 = { version = "=0.30.1", features = ["abi3-py310"] }` y `playwright-desktop-core = { path = "../../core" }`.
 4. Definir `lib/core/src/lib.rs` exportando la API pública del núcleo (`pub use config::*; pub use engine::{CoreEngine, CoreReply, CoreRequest, InvokeParams}; pub use error::{Failure, Result}; pub use platform_api::host_os_language;`, manteniendo privados los detalles internos de Win32/JAB/UIA).
 
-- [ ] **Step 3: Mover fuentes/tests/README con `git mv`, limpiar `lib/rust/` y adaptar `bindings/python/src/lib.rs`**
+- [x] **Step 3: Mover fuentes/tests/README con `git mv`, limpiar `lib/rust/` y adaptar `bindings/python/src/lib.rs`**
 
 1. Mover los archivos fuente de `lib/rust/src/` a `lib/core/src/` (y `abi_layout.c` a `lib/core/tests/abi_layout.c`).
 2. Mover `lib/rust/src/bindings_py.rs` a `lib/bindings/python/src/lib.rs` importando desde `playwright_desktop_core::...`.
 3. Mover `lib/README.md` a `lib/python/README.md` y `lib/tests/**` a `lib/python/tests/**`.
 4. Trasladar `lib/rust/Cargo.lock` a `lib/Cargo.lock` y actualizarlo dentro del workspace (`cargo update --workspace --manifest-path lib/Cargo.toml` o `cargo metadata`).
 
-- [ ] **Step 4: Actualizar `lib/pyproject.toml`, `lib/scripts/build_py.ps1` y `.github/workflows/publish-pypi.yml`**
+- [x] **Step 4: Actualizar `lib/pyproject.toml`, `lib/scripts/build_py.ps1` y `.github/workflows/publish-pypi.yml`**
 
 1. `lib/pyproject.toml`: actualizar `readme = "python/README.md"` y `[tool.maturin] manifest-path = "bindings/python/Cargo.toml"`.
 2. `lib/scripts/build_py.ps1`:
@@ -359,7 +359,7 @@ Confirmar el punto de partida con `cargo test --manifest-path lib/rust/Cargo.tom
 3. `.github/workflows/publish-pypi.yml`:
    - Actualizar rutas al workspace (`lib/Cargo.toml`, `Swatinem/rust-cache@v2` con `workspaces: lib`, `cargo test --manifest-path lib/Cargo.toml --workspace --locked`) y la ruta de pruebas Python (`$env:PYTHONPATH = "$tmp;lib/python/tests"` y `python -B -m unittest discover -s lib/python/tests -v`).
 
-- [ ] **Step 5: Verificar compilación independiente de `core`, árbol de dependencias, `build_py.ps1` e integridad de `.whl` y `.tar.gz`**
+- [x] **Step 5: Verificar compilación independiente de `core`, árbol de dependencias, `build_py.ps1` e integridad de `.whl` y `.tar.gz`**
 
 Run:
 ```powershell
@@ -373,7 +373,7 @@ Validar además:
 - El `.whl` generado incluye la metadata de `python/README.md` y NO incluye archivos de `tests/`.
 Expected: PASS en todas las comprobaciones.
 
-- [ ] **Step 6: Commit del Cargo Workspace**
+- [x] **Step 6: Commit del Cargo Workspace**
 
 ```bash
 git add lib/ .github/workflows/publish-pypi.yml

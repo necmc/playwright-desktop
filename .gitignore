@@ -6,7 +6,7 @@ __pycache__/
 /demo/pc-info/launcher-clickonce/publish/
 /demo/pc-info/launcher-clickonce/.tools/
 /lib/.tools/
-/lib/rust/target/
+/lib/target/
 /lib/dist/
 *.egg-info/
 

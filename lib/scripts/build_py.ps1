@@ -6,7 +6,7 @@ $previousRustupHome = $env:RUSTUP_HOME
 $previousPath = $env:PATH
 Push-Location $libraryRoot
 try {
-    foreach ($directory in @('rust/target/python', 'dist/python')) {
+    foreach ($directory in @('target/python', 'dist/python')) {
         $buildPath = [IO.Path]::GetFullPath((Join-Path $libraryRoot $directory))
         if (-not $buildPath.StartsWith($libraryRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
             throw 'La ruta de limpieza sale de la librería.'
@@ -26,9 +26,9 @@ try {
     $env:CARGO_ENCODED_RUSTFLAGS = $rustFlags -join [char]31
     $pythonCmd = Get-Command python -ErrorAction SilentlyContinue
     $python = if ($pythonCmd -and $pythonCmd.Source -notlike '*\WindowsApps\python.exe') { $pythonCmd.Source } else { 'py' }
-    & $python -B -m maturin build --release --locked --target-dir rust/target/python --out dist/python
+    & $python -B -m maturin build --release --locked --target-dir target/python --out dist/python
     if ($LASTEXITCODE -ne 0) { throw 'Falló la compilación del paquete Python.' }
-    & $python -B -m maturin sdist --manifest-path rust/Cargo.toml --out dist/python
+    & $python -B -m maturin sdist --manifest-path bindings/python/Cargo.toml --out dist/python
     if ($LASTEXITCODE -ne 0) { throw 'Falló la generación del paquete fuente (.tar.gz).' }
 }
 finally {

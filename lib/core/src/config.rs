@@ -48,7 +48,7 @@ impl SessionConfig {
     }
 }
 
-pub(crate) fn validate_absolute_path(value: &str, message: &str) -> Result<()> {
+pub fn validate_absolute_path(value: &str, message: &str) -> Result<()> {
     if value.is_empty() || value.contains('\0') || !Path::new(value).is_absolute() {
         return Err(Failure::new("CONFIGURATION", message));
     }

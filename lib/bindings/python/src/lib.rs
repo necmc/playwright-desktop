@@ -1,6 +1,7 @@
-use crate::config::{SessionConfig, validate_absolute_path};
-use crate::engine::{ControlQuery, CoreEngine, CoreReply, CoreRequest, InvokeParams, WindowQuery, host_os_language};
-use crate::error::Failure;
+use playwright_desktop_core::{
+    ControlQuery, CoreEngine, CoreReply, CoreRequest, Failure, InvokeParams, Result as CoreResult,
+    SessionConfig, WindowQuery, host_os_language, validate_absolute_path,
+};
 use pyo3::prelude::*;
 
 const JAVA_PROVIDER_ID: &str = "jab";
@@ -141,7 +142,7 @@ fn build_java_config(
     java_home: Option<&str>,
     explicit: bool,
     fixed_provider: bool,
-) -> crate::error::Result<SessionConfig> {
+) -> CoreResult<SessionConfig> {
     let mut config = if fixed_provider {
         SessionConfig::explicit_provider(JAVA_PROVIDER_ID)
     } else {
@@ -157,7 +158,8 @@ fn build_java_config(
     Ok(config)
 }
 
-pub fn init_module(module: &Bound<'_, PyModule>) -> PyResult<()> {
+#[pymodule]
+fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(binding_version, module)?)?;
     module.add_function(wrap_pyfunction!(os_language, module)?)?;
     module.add("NativeError", module.py().get_type::<NativeError>())?;

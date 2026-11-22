@@ -1,0 +1,14 @@
+[package]
+name = "playwright-desktop-py"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lib]
+name = "_native"
+crate-type = ["cdylib"]
+
+[dependencies]
+playwright-desktop-core = { path = "../../core" }
+pyo3 = { version = "=0.30.1", features = ["abi3-py310"] }

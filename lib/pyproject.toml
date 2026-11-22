@@ -6,7 +6,7 @@ build-backend = "maturin"
 name = "playwright-desktop"
 dynamic = ["version"]
 description = "Desktop interactions for Playwright Python"
-readme = "README.md"
+readme = "python/README.md"
 requires-python = ">=3.10,<3.15"
 dependencies = ["playwright>=1.63,<1.66"]
 classifiers = [
@@ -16,7 +16,7 @@ classifiers = [
 ]
 
 [tool.maturin]
-manifest-path = "rust/Cargo.toml"
+manifest-path = "bindings/python/Cargo.toml"
 python-source = "python"
 module-name = "playwright_desktop._native"
 bindings = "pyo3"
