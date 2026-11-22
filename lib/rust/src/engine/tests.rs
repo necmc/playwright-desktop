@@ -1,5 +1,5 @@
-use super::*;
-use std::cell::{Cell, RefCell};
+use super::{*, coordinator::Worker, platform::{CandidateSearch, ProviderSelection}};
+use std::{cell::{Cell, RefCell}, collections::VecDeque};
 
 #[derive(Default)]
 struct FakePlatform {
@@ -129,7 +129,7 @@ fn test_worker() -> Worker<FakePlatform> {
 
 fn command(
     request: Arc<RequestState>, operation: Operation, arguments: Arguments,
-) -> (ActiveCommand<FakePlatform>, Receiver<Result<Reply>>) {
+) -> (ActiveCommand<FakePlatform>, Receiver<Result<CoreReply>>) {
     let (reply, receiver) = mpsc::channel();
     (Command { request, operation, arguments, reply, pending: None }, receiver)
 }
@@ -277,7 +277,7 @@ fn a_short_queued_deadline_does_not_poison_an_active_call_with_time_left() {
     }).unwrap();
 
     let (sender, receiver) = mpsc::channel();
-    sender.send(Ok(Reply::handle(7))).unwrap();
+    sender.send(Ok(CoreReply::handle(7))).unwrap();
     assert_eq!(shared.wait_for_reply(&active, receiver).unwrap().handle, 7);
     worker.process_pending(&mut pending);
     assert!(pending.is_empty());
@@ -308,7 +308,7 @@ fn pending_commands_with_expired_cancelled_or_closed_requests_are_discarded() {
     }
     worker.shared.queued.store(pending.len(), Ordering::Release);
     cancelled.cancel();
-    Engine { shared: worker.shared.clone() }.close_session(closed.id);
+    CoreEngine { shared: worker.shared.clone() }.close_session(closed.id);
     worker.process_pending(&mut pending);
 
     for (reply, expected) in replies.into_iter().zip(["TIMEOUT", "CANCELLED", "CANCELLED", "STALE"]) {
@@ -419,7 +419,7 @@ fn same_session_can_hold_multiple_handles_with_metadata_while_blocking_other_ses
     assert!(worker.windows.contains_key(&reply_a.handle));
 
     // Al cerrar la sesión dueña, se liberan todos sus handles y otra sesión puede operar.
-    Engine { shared: worker.shared.clone() }.close_session(owner.id);
+    CoreEngine { shared: worker.shared.clone() }.close_session(owner.id);
     worker.cleanup();
     assert!(worker.windows.is_empty());
     let (mut unblocked, _) = command(request(other, deadline), Operation::PrepareCapture, Arguments {
@@ -527,7 +527,7 @@ fn only_new_ignores_windows_present_when_session_baseline_was_recorded() {
     });
     assert_eq!(worker.step(&mut click_all).unwrap_err().code, "AMBIGUOUS");
 
-    Engine { shared: worker.shared.clone() }.close_session(owner.id);
+    CoreEngine { shared: worker.shared.clone() }.close_session(owner.id);
     worker.cleanup();
     assert!(!worker.baselines.contains_key(&owner.id));
 }
@@ -557,4 +557,30 @@ fn complete_capture_supports_has_text_and_excludes_before_windows() {
     assert!(worker.step(&mut capture).unwrap().is_none());
     let reply = worker.step(&mut capture).unwrap().unwrap();
     assert_eq!(reply.pid, Some(2));
+}
+
+#[test]
+fn core_engine_error_messages_do_not_reference_client_runtime() {
+    let failures = [
+        crate::engine::worker_stopped_failure(),
+        crate::engine::engine_unavailable_failure(),
+        crate::engine::shared_engine_unavailable_failure(),
+        crate::engine::stalled_timeout_failure(),
+    ];
+    for failure in failures {
+        assert!(!failure.message.contains("Python"), "unexpected client name in: {}", failure.message);
+        assert!(
+            failure.message.to_ascii_lowercase().contains("host process"),
+            "missing host process guidance in: {}",
+            failure.message
+        );
+    }
+}
+
+#[test]
+fn invoke_params_rejects_unknown_operation_without_python_context() {
+    assert_eq!(Operation::parse("unsupported").err().unwrap().code, "CONFIGURATION");
+    let params = crate::engine::InvokeParams::default();
+    assert!(params.operation.is_empty());
+    assert_eq!(params.window_id, 0);
 }

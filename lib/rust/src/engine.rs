@@ -1,33 +1,54 @@
 use crate::error::{Failure, Result};
-use platform::{CandidateSearch, CapturePreparation, ControlQuery, Platform, ProviderSelection, WindowQuery};
+use coordinator::{mutation_timeout_message, timeout_message};
+use platform::{CapturePreparation, Platform};
 pub(crate) use platform::{ControlAction, ControlResult};
-use pyo3::prelude::*;
-use std::{collections::{HashMap, HashSet, VecDeque}, path::Path,
-    sync::{Arc, Condvar, Mutex, OnceLock, atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering}, mpsc::{self, Sender, Receiver}},
-    time::{Duration, Instant}};
+pub use platform::{ControlQuery, WindowQuery};
+use std::{
+    collections::{HashMap, HashSet},
+    path::Path,
+    sync::{
+        Arc, Condvar, Mutex, OnceLock,
+        atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering},
+        mpsc::{self, Receiver, Sender},
+    },
+    time::{Duration, Instant},
+};
 
-struct SessionState { id: u64, closed: AtomicBool, options: SessionOptions }
+pub(crate) struct SessionState {
+    pub(crate) id: u64,
+    closed: AtomicBool,
+    pub(crate) options: SessionOptions,
+}
 
-/// Session settings accepted by the Python binding. Only the Windows adapter
+/// Session settings accepted by the core engine. Only the Windows adapter
 /// interprets the Java settings when choosing or preparing a provider.
-pub(crate) struct SessionOptions {
+#[derive(Clone)]
+pub struct SessionOptions {
     pub(crate) java_home: Option<String>,
-    automatic: bool,
-    explicit_java_home: bool,
+    pub(crate) automatic: bool,
+    pub(crate) explicit_java_home: bool,
 }
 
 impl SessionOptions {
-    fn java(java_home: &str) -> Result<Self> {
+    pub fn java(java_home: &str) -> Result<Self> {
         if java_home.is_empty() || java_home.contains('\0') || !Path::new(java_home).is_absolute() {
             return Err(Failure::new("CONFIGURATION", "java_home must be an absolute runtime directory."));
         }
-        Ok(Self { java_home: Some(java_home.into()), automatic: false, explicit_java_home: true })
+        Ok(Self {
+            java_home: Some(java_home.into()),
+            automatic: false,
+            explicit_java_home: true,
+        })
     }
 
-    fn automatic(java_home: Option<&str>, explicit: bool) -> Result<Self> {
+    pub fn automatic(java_home: Option<&str>, explicit: bool) -> Result<Self> {
         let mut options = match java_home {
             Some(java_home) => Self::java(java_home)?,
-            None => Self { java_home: None, automatic: true, explicit_java_home: false },
+            None => Self {
+                java_home: None,
+                automatic: true,
+                explicit_java_home: false,
+            },
         };
         options.automatic = true;
         options.explicit_java_home = explicit && java_home.is_some();
@@ -35,24 +56,47 @@ impl SessionOptions {
     }
 }
 
-const TIMEOUT_MESSAGE: &str =
-    "No unique desktop window or control became ready before the deadline. Check its title, PID and accessibility provider.";
-const MUTATION_TIMEOUT_MESSAGE: &str =
-    "The desktop action timed out after entering the native operation; its effect may be unknown.";
 const REQUEST_CANCELLED: u8 = 1;
 const MUTATION_STARTED: u8 = 2;
 const REQUEST_EXPIRED: u8 = 4;
 
+pub(crate) fn worker_stopped_failure() -> Failure {
+    Failure::new("BRIDGE", "The native worker stopped. Restart the host process.")
+}
+
+pub(crate) fn engine_unavailable_failure() -> Failure {
+    Failure::new("BRIDGE", "The native engine is unavailable. Restart the host process.")
+}
+
+pub(crate) fn shared_engine_unavailable_failure() -> Failure {
+    Failure::new(
+        "BRIDGE",
+        "The shared desktop engine is unavailable after a native failure. Restart the host process.",
+    )
+}
+
+pub(crate) fn stalled_timeout_failure() -> Failure {
+    Failure::new(
+        "TIMEOUT",
+        "A native bridge call exceeded its deadline; its effect may be unknown. Restart the host process before using desktop actions again.",
+    )
+}
+
 pub(crate) struct RequestState {
-    session: Arc<SessionState>,
-    deadline: Instant,
+    pub(crate) session: Arc<SessionState>,
+    pub(crate) deadline: Instant,
     immediate: bool,
     status: AtomicU8,
 }
 
 impl RequestState {
     fn new(session: Arc<SessionState>, deadline: Instant, immediate: bool) -> Self {
-        Self { session, deadline, immediate, status: AtomicU8::new(0) }
+        Self {
+            session,
+            deadline,
+            immediate,
+            status: AtomicU8::new(0),
+        }
     }
 
     pub(crate) fn check(&self) -> Result<()> {
@@ -62,7 +106,7 @@ impl RequestState {
         }
         if status & REQUEST_EXPIRED != 0 || Instant::now() >= self.deadline {
             let message = if self.expire() {
-                MUTATION_TIMEOUT_MESSAGE
+                mutation_timeout_message()
             } else {
                 "The desktop request exceeded its deadline."
             };
@@ -128,19 +172,31 @@ struct Arguments {
     control: ControlQuery,
 }
 
-#[pyclass]
-#[derive(Debug, Default)]
-pub struct Reply {
-    #[pyo3(get)] pub handle: u64,
-    #[pyo3(get)] pub text: Option<String>,
-    #[pyo3(get)] pub pid: Option<u32>,
-    #[pyo3(get)] pub title: Option<String>,
+#[derive(Clone, Debug, Default)]
+pub struct CoreReply {
+    pub handle: u64,
+    pub text: Option<String>,
+    pub pid: Option<u32>,
+    pub title: Option<String>,
 }
 
-impl Reply {
+impl CoreReply {
     fn handle(handle: u64) -> Self {
-        Self { handle, ..Self::default() }
+        Self {
+            handle,
+            ..Self::default()
+        }
     }
+}
+
+#[derive(Clone, Default)]
+pub struct InvokeParams {
+    pub operation: String,
+    pub window_id: u64,
+    pub capture_id: u64,
+    pub window: WindowQuery,
+    pub text: String,
+    pub control: ControlQuery,
 }
 
 #[derive(Clone, Copy)]
@@ -182,7 +238,7 @@ struct Command<P> {
     request: Arc<RequestState>,
     operation: Operation,
     arguments: Arguments,
-    reply: Sender<Result<Reply>>,
+    reply: Sender<Result<CoreReply>>,
     pending: P,
 }
 
@@ -191,146 +247,181 @@ type ActiveCommand<P> = Command<Option<PendingCall<P>>>;
 
 impl QueuedCommand {
     fn activate<P: Platform>(self) -> ActiveCommand<P> {
-        let Self { request, operation, arguments, reply, pending: () } = self;
-        Command { request, operation, arguments, reply, pending: None }
+        let Self {
+            request,
+            operation,
+            arguments,
+            reply,
+            pending: (),
+        } = self;
+        Command {
+            request,
+            operation,
+            arguments,
+            reply,
+            pending: None,
+        }
     }
 }
 
 enum PendingCall<P: Platform> {
     PrepareCapture(CapturePreparation),
-    CompleteCapture { capture_id: u64, result: Receiver<Result<Vec<P::Window>>> },
-    Discover { operation: WindowOperation, result: Receiver<Result<Vec<P::Window>>> },
-    ResolveProvider { id: u64, result: Receiver<Result<P::Provider>>, until: Instant, fallback: P::Provider },
-    Action { id: u64, result: Receiver<Result<Option<ControlResult>>> },
-    Closing { id: u64 },
+    CompleteCapture {
+        capture_id: u64,
+        result: Receiver<Result<Vec<P::Window>>>,
+    },
+    Discover {
+        operation: WindowOperation,
+        result: Receiver<Result<Vec<P::Window>>>,
+    },
+    ResolveProvider {
+        id: u64,
+        result: Receiver<Result<P::Provider>>,
+        until: Instant,
+        fallback: P::Provider,
+    },
+    Action {
+        id: u64,
+        result: Receiver<Result<Option<ControlResult>>>,
+    },
+    Closing {
+        id: u64,
+    },
 }
 
-#[pyclass]
 #[derive(Clone)]
-pub struct Request { state: Arc<RequestState> }
-
-#[pymethods]
-impl Request {
-    fn cancel(&self) { self.state.cancel(); }
+pub struct CoreRequest {
+    state: Arc<RequestState>,
 }
 
-#[pyclass]
-pub struct Engine { shared: Arc<Shared> }
+impl CoreRequest {
+    pub fn cancel(&self) {
+        self.state.cancel();
+    }
+}
 
-fn as_python(error: Failure) -> PyErr { crate::NativeError::new_err((error.code, error.message)) }
+#[derive(Clone)]
+pub struct CoreEngine {
+    shared: Arc<Shared>,
+}
 
-#[pymethods]
-impl Engine {
-    #[new]
-    fn new() -> PyResult<Self> {
-        let mut global = SHARED.get_or_init(|| Mutex::new(None)).lock()
-            .map_err(|_| as_python(Failure::new("BRIDGE", "The engine initialization lock failed.")))?;
+impl CoreEngine {
+    pub fn new() -> Result<Self> {
+        let mut global = SHARED
+            .get_or_init(|| Mutex::new(None))
+            .lock()
+            .map_err(|_| Failure::new("BRIDGE", "The engine initialization lock failed."))?;
         if global.is_none() {
             let (sender, receiver) = mpsc::channel();
             let shared = Arc::new(Shared::new(sender));
-            platform::start_host_worker(shared.clone(), receiver).map_err(as_python)?;
+            platform::start_host_worker(shared.clone(), receiver)?;
             *global = Some(shared);
         }
-        Ok(Self { shared: global.as_ref().unwrap().clone() })
+        Ok(Self {
+            shared: global.as_ref().unwrap().clone(),
+        })
     }
 
-    fn open_session(&self, java_home: &str) -> PyResult<u64> {
-        let options = SessionOptions::java(java_home).map_err(as_python)?;
-        self.register_session(options)
+    pub fn open_session(&self, options: SessionOptions) -> Result<u64> {
+        self.healthy()?;
+        let id = self.shared.next.fetch_add(1, Ordering::Relaxed);
+        self.shared.sessions.lock().unwrap().insert(
+            id,
+            Arc::new(SessionState {
+                id,
+                closed: AtomicBool::new(false),
+                options,
+            }),
+        );
+        Ok(id)
     }
 
-    #[pyo3(signature = (java_home=None, *, explicit=false))]
-    fn open_auto_session(&self, java_home: Option<&str>, explicit: bool) -> PyResult<u64> {
-        self.register_session(SessionOptions::automatic(java_home, explicit).map_err(as_python)?)
-    }
-
-    fn new_request(&self, session_id: u64, timeout_ms: u64) -> PyResult<Request> {
-        self.healthy().map_err(as_python)?;
-        if timeout_ms > u32::MAX as u64 { return Err(as_python(Failure::new("CONFIGURATION", "Timeout exceeds the supported range."))); }
-        let session = self.shared.sessions.lock().unwrap().get(&session_id).cloned()
-            .ok_or_else(|| as_python(Failure::new("CLOSED", "The desktop session is closed.")))?;
+    pub fn new_request(&self, session_id: u64, timeout_ms: u64) -> Result<CoreRequest> {
+        self.healthy()?;
+        if timeout_ms > u32::MAX as u64 {
+            return Err(Failure::new("CONFIGURATION", "Timeout exceeds the supported range."));
+        }
+        let session = self
+            .shared
+            .sessions
+            .lock()
+            .unwrap()
+            .get(&session_id)
+            .cloned()
+            .ok_or_else(|| Failure::new("CLOSED", "The desktop session is closed."))?;
         let timeout = if timeout_ms == 0 { 10_000 } else { timeout_ms };
         let deadline = Instant::now() + Duration::from_millis(timeout);
-        Ok(Request { state: Arc::new(RequestState::new(session, deadline, timeout_ms == 0)) })
+        Ok(CoreRequest {
+            state: Arc::new(RequestState::new(session, deadline, timeout_ms == 0)),
+        })
     }
 
-    #[pyo3(signature = (request, operation, *, window_id=0, capture_id=0, title="", pid=None, role="", name="", text="", scope_role="", scope_name="", title_prefix="", has_text="", only_new=false))]
-    fn invoke(&self, py: Python<'_>, request: &Request, operation: &str,
-              window_id: u64, capture_id: u64, title: &str, pid: Option<u32>,
-              role: &str, name: &str, text: &str, scope_role: &str, scope_name: &str, title_prefix: &str,
-              has_text: &str, only_new: bool) -> PyResult<Reply> {
-        self.healthy().map_err(as_python)?;
-        request.state.check().map_err(as_python)?;
-        let operation = Operation::parse(operation).map_err(as_python)?;
+    pub fn invoke(&self, request: &CoreRequest, params: InvokeParams) -> Result<CoreReply> {
+        self.healthy()?;
+        request.state.check()?;
+        let operation = Operation::parse(&params.operation)?;
         if self.shared.queued.fetch_add(1, Ordering::AcqRel) >= 64 {
             self.shared.queued.fetch_sub(1, Ordering::AcqRel);
-            return Err(as_python(Failure::new("BUSY", "The native request queue is full.")));
+            return Err(Failure::new("BUSY", "The native request queue is full."));
         }
         let (sender, receiver) = mpsc::channel();
-        let state = request.state.clone();
-        let command = Command { request: state.clone(), operation,
+        let command = Command {
+            request: request.state.clone(),
+            operation,
             arguments: Arguments {
-                window_id, capture_id, text: text.into(),
-                window: WindowQuery {
-                    title: title.into(), pid, title_prefix: title_prefix.into(), has_text: has_text.into(), only_new,
-                },
-                control: ControlQuery { role: role.into(), name: name.into(), scope_role: scope_role.into(), scope_name: scope_name.into() },
+                window_id: params.window_id,
+                capture_id: params.capture_id,
+                window: params.window,
+                text: params.text,
+                control: params.control,
             },
-            reply: sender, pending: () };
+            reply: sender,
+            pending: (),
+        };
         if self.shared.sender.send(command).is_err() {
             self.shared.queued.fetch_sub(1, Ordering::AcqRel);
             self.shared.poisoned.store(true, Ordering::Release);
-            return Err(as_python(Failure::new("BRIDGE", "The native worker stopped. Restart Python.")));
+            return Err(worker_stopped_failure());
         }
-        let shared = self.shared.clone();
-        py.detach(move || shared.wait_for_reply(&state, receiver)).map_err(as_python)
+        self.shared.wait_for_reply(&request.state, receiver)
     }
 
-    fn close_session(&self, session_id: u64) {
+    pub fn close_session(&self, session_id: u64) {
         if let Some(session) = self.shared.sessions.lock().unwrap().remove(&session_id) {
             session.closed.store(true, Ordering::Release);
         }
     }
 
-    fn cancel_capture(&self, session_id: u64, capture_id: u64) {
+    pub fn cancel_capture(&self, session_id: u64, capture_id: u64) {
         self.shared.captures_cancelled.lock().unwrap().insert((session_id, capture_id));
-    }
-}
-
-impl Engine {
-    fn register_session(&self, options: SessionOptions) -> PyResult<u64> {
-        self.healthy().map_err(as_python)?;
-        let id = self.shared.next.fetch_add(1, Ordering::Relaxed);
-        self.shared.sessions.lock().unwrap().insert(id, Arc::new(SessionState {
-            id, closed: AtomicBool::new(false), options,
-        }));
-        Ok(id)
     }
 
     fn healthy(&self) -> Result<()> {
         if self.shared.poisoned.load(Ordering::Acquire) {
-            Err(Failure::new("BRIDGE", "The shared desktop engine is unavailable after a native failure. Restart Python."))
-        } else { Ok(()) }
+            Err(shared_engine_unavailable_failure())
+        } else {
+            Ok(())
+        }
     }
 }
 
 impl Shared {
-    fn wait_for_reply(&self, state: &RequestState, receiver: Receiver<Result<Reply>>) -> Result<Reply> {
+    fn wait_for_reply(&self, state: &RequestState, receiver: Receiver<Result<CoreReply>>) -> Result<CoreReply> {
         match receiver.recv_timeout(state.deadline.saturating_duration_since(Instant::now())) {
             Ok(result) => result,
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 let mutation_started = state.expire();
                 if self.mark_stalled_call() {
-                    Err(Failure::new("TIMEOUT", "A native bridge call exceeded its deadline; its effect may be unknown. Restart Python before using desktop actions again."))
+                    Err(stalled_timeout_failure())
                 } else if mutation_started {
-                    Err(Failure::new("TIMEOUT", MUTATION_TIMEOUT_MESSAGE))
+                    Err(Failure::new("TIMEOUT", mutation_timeout_message()))
                 } else {
-                    Err(Failure::new("TIMEOUT", TIMEOUT_MESSAGE))
+                    Err(Failure::new("TIMEOUT", timeout_message()))
                 }
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
                 self.poisoned.store(true, Ordering::Release);
-                Err(Failure::new("BRIDGE", "The native worker stopped. Restart Python."))
+                Err(worker_stopped_failure())
             }
         }
     }
@@ -365,14 +456,17 @@ impl Shared {
 
     fn mark_stalled_call(&self) -> bool {
         let activity = self.native_activity.lock().unwrap();
-        let Some(generation) = activity.overdue_generation() else { return false; };
+        let Some(generation) = activity.overdue_generation() else {
+            return false;
+        };
         // Allow a bounded interval for the worker to acknowledge cancellation. The
         // same lock covers the final check and the admission of the next native call.
-        let (activity, _) = self.native_finished.wait_timeout_while(
-            activity,
-            Duration::from_millis(100),
-            |activity| activity.overdue_generation() == Some(generation),
-        ).unwrap();
+        let (activity, _) = self
+            .native_finished
+            .wait_timeout_while(activity, Duration::from_millis(100), |activity| {
+                activity.overdue_generation() == Some(generation)
+            })
+            .unwrap();
         if activity.overdue_generation() != Some(generation) {
             return false;
         }
@@ -381,440 +475,7 @@ impl Shared {
     }
 }
 
-struct Capture<K> {
-    session: u64,
-    query: WindowQuery,
-    before: HashSet<K>,
-    request: Arc<RequestState>,
-}
-
-struct BoundWindow<W, P> {
-    session: u64,
-    window: W,
-    capture: Option<u64>,
-    provider: Option<P>,
-}
-
-struct Worker<P: Platform> {
-    shared: Arc<Shared>,
-    platform: P,
-    captures: HashMap<u64, Capture<P::WindowKey>>,
-    baselines: HashMap<u64, HashSet<P::WindowKey>>,
-    windows: HashMap<u64, BoundWindow<P::Window, P::Provider>>,
-    closed: HashMap<u64, u64>,
-    live: HashSet<u64>,
-}
-
-impl<P: Platform> Worker<P> {
-    fn new(shared: Arc<Shared>, platform: P) -> Self {
-        Self {
-            shared, platform, captures: HashMap::new(), baselines: HashMap::new(),
-            windows: HashMap::new(), closed: HashMap::new(), live: HashSet::new(),
-        }
-    }
-
-    fn run(mut self, receiver: Receiver<QueuedCommand>) {
-        let shared = self.shared.clone();
-        let mut pending = VecDeque::new();
-        loop {
-            if let Ok(command) = receiver.recv_timeout(Duration::from_millis(if pending.is_empty() { 15 } else { 5 })) {
-                pending.push_back(command.activate());
-            }
-            pending.extend(receiver.try_iter().take(64).map(QueuedCommand::activate));
-            let _ = shared.run_native(Instant::now() + Duration::from_secs(10), || self.cleanup());
-            self.process_pending(&mut pending);
-        }
-    }
-
-    fn process_pending(&mut self, pending: &mut VecDeque<ActiveCommand<P>>) {
-        let shared = self.shared.clone();
-        for _ in 0..pending.len() {
-            let mut command = pending.pop_front().unwrap();
-            let result = if self.shared.poisoned.load(Ordering::Acquire) {
-                Err(Failure::new("BRIDGE", "The native engine is unavailable; restart Python."))
-            } else if let Err(error) = command.request.check() {
-                Err(error)
-            } else {
-                shared.run_native(command.request.deadline, || self.step(&mut command))
-                    .unwrap_or_else(|| Err(Failure::new("BRIDGE", "The native engine is unavailable; restart Python.")))
-            };
-            match result {
-                Ok(None) if command.pending.is_some() || !command.request.immediate => pending.push_back(command),
-                Ok(None) => self.complete(command, Err(Failure::new("TIMEOUT", "The requested desktop window or control is not ready (timeout=0)."))),
-                Ok(Some(reply)) => self.complete(command, Ok(reply)),
-                Err(error) => self.complete(command, Err(error)),
-            }
-        }
-    }
-
-    fn complete(&mut self, command: ActiveCommand<P>, result: Result<Reply>) {
-        if result.is_err() && matches!(command.operation, Operation::CompleteCapture) {
-            self.cancel(command.request.session.id, command.arguments.capture_id);
-        }
-        self.shared.queued.fetch_sub(1, Ordering::AcqRel);
-        let _ = command.reply.send(result);
-    }
-
-    fn cleanup(&mut self) {
-        self.platform.check_health();
-        let live: HashSet<u64> = self.shared.sessions.lock().unwrap().keys().copied().collect();
-        let cancellations = std::mem::take(&mut *self.shared.captures_cancelled.lock().unwrap());
-        for (session, capture) in cancellations { self.cancel(session, capture); }
-        self.discard_abandoned_captures();
-        self.captures.retain(|_, capture| live.contains(&capture.session));
-        self.baselines.retain(|session, _| live.contains(session));
-        self.closed.retain(|_, session| live.contains(session));
-
-        let removed: Vec<u64> = self.windows.iter()
-            .filter(|(_, item)| !live.contains(&item.session) || !self.platform.is_window_alive(&item.window))
-            .map(|(id, _)| *id).collect();
-        for id in removed {
-            self.release_window(id, &live);
-        }
-        if live != self.live {
-            self.platform.retain_sessions(live.clone());
-            self.live = live;
-        }
-    }
-
-    fn discard_abandoned_captures(&mut self) {
-        self.captures.retain(|_, capture| capture.request.check().is_ok());
-    }
-
-    fn cancel(&mut self, session: u64, capture_id: u64) {
-        if self.captures.get(&capture_id).is_some_and(|capture| capture.session == session) {
-            self.captures.remove(&capture_id);
-        }
-        let owned = self.windows.iter().find(|(_, window)| {
-            window.session == session && window.capture == Some(capture_id)
-        }).map(|(id, _)| *id);
-        if let Some(id) = owned {
-            self.release_window(id, &HashSet::new());
-        }
-    }
-
-    fn require_owner(&self, session: u64) -> Result<()> {
-        if self.windows.values().any(|window| window.session != session)
-            || self.captures.values().any(|capture| capture.session != session) {
-            return Err(Failure::new("BUSY", "Another desktop flow is active. Close its window or desktop session first."));
-        }
-        Ok(())
-    }
-
-    fn select_candidate(
-        &mut self, request: &RequestState, query: &WindowQuery, candidates: Vec<P::Window>,
-        capture: Option<(u64, &HashSet<P::WindowKey>)>,
-    ) -> Result<Option<u64>> {
-        let session = request.session.id;
-        self.require_owner(session)?;
-        if capture.is_some() {
-            query.validate_capture()?;
-        } else {
-            query.validate()?;
-        }
-        let mut candidates = candidates.into_iter()
-            .filter(|window| !capture.is_some_and(|(_, before)| before.contains(&self.platform.window_key(window))));
-        let Some(candidate) = candidates.next() else { return Ok(None); };
-        if candidates.next().is_some() {
-            let filter = if query.title.is_empty() { "an exact title" } else { "a PID" };
-            return Err(Failure::new("AMBIGUOUS", format!("More than one window matches. Add {filter} to narrow the search.")));
-        }
-        request.check()?;
-        let key = self.platform.window_key(&candidate);
-        if let Some((&id, _)) = self.windows.iter().find(|(_, item)| self.platform.window_key(&item.window) == key) {
-            return Ok(Some(id));
-        }
-        let id = self.shared.next.fetch_add(1, Ordering::Relaxed);
-        self.windows.insert(id, BoundWindow {
-            session, window: candidate, capture: capture.map(|(id, _)| id), provider: None,
-        });
-        Ok(Some(id))
-    }
-
-    fn step(&mut self, command: &mut ActiveCommand<P>) -> Result<Option<Reply>> {
-        command.request.check()?;
-        self.discard_abandoned_captures();
-        if let Some(pending) = command.pending.take() {
-            return self.resume(command, pending);
-        }
-        match command.operation {
-            Operation::PrepareCapture => {
-                self.require_owner(command.request.session.id)?;
-                if let Some(preparation) = self.platform.prepare_capture(command.request.clone())? {
-                    command.pending = Some(PendingCall::PrepareCapture(preparation));
-                    return Ok(None);
-                }
-                self.prepare_capture(&command.request, &command.arguments)
-            }
-            Operation::CompleteCapture => self.complete_capture(command, command.arguments.capture_id),
-            Operation::Window(operation) => self.operate_window(command, operation),
-        }
-    }
-
-    fn resume(&mut self, command: &mut ActiveCommand<P>, pending: PendingCall<P>) -> Result<Option<Reply>> {
-        match pending {
-            PendingCall::PrepareCapture(preparation) => {
-                match receive(&preparation.result) {
-                    Ok(Some(response)) => response?,
-                    Ok(None) if preparation.until.is_none_or(|deadline| Instant::now() < deadline) => {
-                        command.pending = Some(PendingCall::PrepareCapture(preparation));
-                        return Ok(None);
-                    }
-                    Err(error) if preparation.until.is_none() => return Err(error),
-                    _ => {},
-                }
-                self.prepare_capture(&command.request, &command.arguments)
-            }
-            PendingCall::CompleteCapture { capture_id, result } => {
-                let Some(response) = receive(&result)? else {
-                    command.pending = Some(PendingCall::CompleteCapture { capture_id, result });
-                    return Ok(None);
-                };
-                self.finish_capture(&command.request, capture_id, response?)
-            }
-            PendingCall::Discover { operation, result } => {
-                let Some(response) = receive(&result)? else {
-                    command.pending = Some(PendingCall::Discover { operation, result });
-                    return Ok(None);
-                };
-                let candidates = response?;
-                let Some(id) = self.select_candidate(&command.request, &command.arguments.window, candidates, None)? else {
-                    return Ok(None);
-                };
-                self.act_on_window(command, id, operation)
-            }
-            PendingCall::ResolveProvider { id, result, until, fallback } => {
-                let provider = match receive(&result) {
-                    Ok(Some(response)) => response?,
-                    Err(_) => fallback,
-                    Ok(None) if Instant::now() >= until => fallback,
-                    Ok(None) => {
-                        command.pending = Some(PendingCall::ResolveProvider { id, result, until, fallback });
-                        return Ok(None);
-                    }
-                };
-                self.dispatch(command, id, provider)
-            }
-            PendingCall::Action { id, result } => {
-                let Some(response) = receive(&result)? else {
-                    command.pending = Some(PendingCall::Action { id, result });
-                    return Ok(None);
-                };
-                match response {
-                    Ok(Some(result)) => Ok(Some(self.reply_for_window(id, result.text))),
-                    Ok(None) => Ok(None),
-                    Err(error) => {
-                        if error.code == "STALE" { self.invalidate_window(id); }
-                        Err(error)
-                    }
-                }
-            }
-            PendingCall::Closing { id } => self.poll_closing(command, id),
-        }
-    }
-
-    fn reply_for_window(&self, id: u64, text: Option<String>) -> Reply {
-        if let Some(entry) = self.windows.get(&id) {
-            let (pid, title) = self.platform.window_metadata(&entry.window);
-            return Reply { handle: id, text, pid: Some(pid), title: Some(title) };
-        }
-        Reply { handle: id, text, pid: None, title: None }
-    }
-
-    fn ensure_baseline(&mut self, session: u64) -> Result<()> {
-        if !self.baselines.contains_key(&session) {
-            self.baselines.insert(session, self.platform.snapshot_windows()?);
-        }
-        Ok(())
-    }
-
-    fn discovery_exclude(&self, session: u64, query: &WindowQuery) -> HashSet<P::WindowKey> {
-        if query.only_new {
-            self.baselines.get(&session).cloned().unwrap_or_default()
-        } else {
-            HashSet::new()
-        }
-    }
-
-    fn prepare_capture(&mut self, request: &Arc<RequestState>, args: &Arguments) -> Result<Option<Reply>> {
-        let session = request.session.id;
-        self.require_owner(session)?;
-        args.window.validate_capture()?;
-        self.ensure_baseline(session)?;
-        let before = self.platform.candidates(&args.window)?.iter()
-            .map(|window| self.platform.window_key(window)).collect();
-        request.check()?;
-        let id = self.shared.next.fetch_add(1, Ordering::Relaxed);
-        self.captures.insert(id, Capture {
-            session, query: args.window.clone(), before, request: request.clone(),
-        });
-        Ok(Some(Reply::handle(id)))
-    }
-
-    fn complete_capture(&mut self, command: &mut ActiveCommand<P>, capture_id: u64) -> Result<Option<Reply>> {
-        let capture = self.captures.get(&capture_id).filter(|capture| capture.session == command.request.session.id)
-            .ok_or_else(|| Failure::new("CLOSED", "The window capture is no longer active."))?;
-        let query = capture.query.clone();
-        let before = capture.before.clone();
-        match self.platform.find_candidates(command.request.clone(), &query, &before)? {
-            CandidateSearch::Ready(candidates) => self.finish_capture(&command.request, capture_id, candidates),
-            CandidateSearch::Pending(result) => {
-                command.pending = Some(PendingCall::CompleteCapture { capture_id, result });
-                Ok(None)
-            }
-        }
-    }
-
-    fn finish_capture(&mut self, request: &RequestState, capture_id: u64, candidates: Vec<P::Window>) -> Result<Option<Reply>> {
-        let capture = self.captures.get(&capture_id).filter(|capture| capture.session == request.session.id)
-            .ok_or_else(|| Failure::new("CLOSED", "The window capture is no longer active."))?;
-        let query = capture.query.clone();
-        let before = capture.before.clone();
-        let Some(id) = self.select_candidate(request, &query, candidates, Some((capture_id, &before)))? else {
-            return Ok(None);
-        };
-        self.captures.remove(&capture_id);
-        Ok(Some(self.reply_for_window(id, None)))
-    }
-
-    fn operate_window(&mut self, command: &mut ActiveCommand<P>, operation: WindowOperation) -> Result<Option<Reply>> {
-        if command.arguments.window_id != 0 {
-            return self.act_on_window(command, command.arguments.window_id, operation);
-        }
-        let session = command.request.session.id;
-        self.require_owner(session)?;
-        command.arguments.window.validate()?;
-        self.ensure_baseline(session)?;
-        let exclude = self.discovery_exclude(session, &command.arguments.window);
-        match self.platform.find_candidates(command.request.clone(), &command.arguments.window, &exclude)? {
-            CandidateSearch::Ready(candidates) => {
-                let Some(id) = self.select_candidate(&command.request, &command.arguments.window, candidates, None)? else {
-                    return Ok(None);
-                };
-                self.act_on_window(command, id, operation)
-            }
-            CandidateSearch::Pending(result) => {
-                command.pending = Some(PendingCall::Discover { operation, result });
-                Ok(None)
-            }
-        }
-    }
-
-    fn act_on_window(&mut self, command: &mut ActiveCommand<P>, id: u64, operation: WindowOperation) -> Result<Option<Reply>> {
-        let request = &command.request;
-        let session = request.session.id;
-        let tolerates_closed = matches!(operation, WindowOperation::WaitClosed | WindowOperation::CloseWindow);
-        if tolerates_closed && self.closed.get(&id) == Some(&session) {
-            return Ok(Some(Reply::handle(id)));
-        }
-        let item = self.window(id, session)?;
-        if !self.platform.is_window_alive(&item.window) {
-            self.invalidate_window(id);
-            if tolerates_closed { return Ok(Some(Reply::handle(id))); }
-            return Err(Failure::new("STALE", "The native window no longer exists."));
-        }
-        match operation {
-            WindowOperation::WaitClosed => return Ok(None),
-            WindowOperation::BringToFront => {
-                self.platform.bring_to_front(&item.window)?;
-                return Ok(Some(self.reply_for_window(id, None)));
-            }
-            WindowOperation::CloseWindow => return self.begin_close(command, id),
-            _ => {}
-        }
-        if let Some(provider) = item.provider {
-            return self.dispatch(command, id, provider);
-        }
-        let window = item.window.clone();
-        match self.platform.resolve_provider(request.clone(), window) {
-            ProviderSelection::Ready(provider) => self.dispatch(command, id, provider),
-            ProviderSelection::Pending { result, until, fallback } => {
-                command.pending = Some(PendingCall::ResolveProvider { id, result, until, fallback });
-                Ok(None)
-            }
-        }
-    }
-
-    fn begin_close(&mut self, command: &mut ActiveCommand<P>, id: u64) -> Result<Option<Reply>> {
-        command.request.begin_mutation()?;
-        let session = command.request.session.id;
-        let window = self.window(id, session)?.window.clone();
-        if !self.platform.post_close(&window)? {
-            self.invalidate_window(id);
-            return Ok(Some(Reply::handle(id)));
-        }
-        command.pending = Some(PendingCall::Closing { id });
-        Ok(None)
-    }
-
-    fn poll_closing(&mut self, command: &mut ActiveCommand<P>, id: u64) -> Result<Option<Reply>> {
-        let session = command.request.session.id;
-        if self.closed.get(&id) == Some(&session) {
-            return Ok(Some(Reply::handle(id)));
-        }
-        let item = self.window(id, session)?;
-        if !self.platform.is_window_alive(&item.window) {
-            self.invalidate_window(id);
-            return Ok(Some(Reply::handle(id)));
-        }
-        command.pending = Some(PendingCall::Closing { id });
-        Ok(None)
-    }
-
-    fn dispatch(&mut self, command: &mut ActiveCommand<P>, id: u64, provider: P::Provider) -> Result<Option<Reply>> {
-        let request = &command.request;
-        request.check()?;
-        self.window(id, request.session.id)?;
-        let item = self.windows.get_mut(&id).unwrap();
-        let provider = *item.provider.get_or_insert(provider);
-        let action = match command.operation {
-            Operation::Window(WindowOperation::WaitVisible) => ControlAction::WaitVisible,
-            Operation::Window(WindowOperation::ReadText) => ControlAction::ReadText,
-            Operation::Window(WindowOperation::Fill) => ControlAction::Fill(command.arguments.text.clone()),
-            Operation::Window(WindowOperation::Click) => ControlAction::Click,
-            _ => unreachable!("only control actions are dispatched to the accessibility provider"),
-        };
-        let result = self.platform.act(
-            provider, request.clone(), id, item.window.clone(), action, command.arguments.control.clone(),
-        )?;
-        command.pending = Some(PendingCall::Action { id, result });
-        Ok(None)
-    }
-
-    fn window(&self, id: u64, session: u64) -> Result<&BoundWindow<P::Window, P::Provider>> {
-        self.windows.get(&id).filter(|window| window.session == session)
-            .ok_or_else(|| Failure::new("STALE", "This native window is closed or belongs to another session."))
-    }
-
-    fn invalidate_window(&mut self, id: u64) {
-        if let Some(item) = self.windows.remove(&id) {
-            self.closed.insert(id, item.session);
-            self.release_provider(id, item.provider);
-        }
-    }
-
-    fn release_window(&mut self, id: u64, live: &HashSet<u64>) {
-        if let Some(item) = self.windows.remove(&id) {
-            if live.contains(&item.session) { self.closed.insert(id, item.session); }
-            self.release_provider(id, item.provider);
-        }
-    }
-
-    fn release_provider(&self, id: u64, provider: Option<P::Provider>) {
-        if let Some(provider) = provider {
-            self.platform.release(id, provider);
-        }
-    }
-}
-
-fn receive<T>(reply: &Receiver<T>) -> Result<Option<T>> {
-    match reply.try_recv() {
-        Ok(value) => Ok(Some(value)),
-        Err(mpsc::TryRecvError::Empty) => Ok(None),
-        Err(mpsc::TryRecvError::Disconnected) => Err(Failure::new("BRIDGE", "The desktop accessibility provider stopped.")),
-    }
-}
-
+mod coordinator;
 mod platform;
 #[cfg(windows)]
 mod windows_platform;

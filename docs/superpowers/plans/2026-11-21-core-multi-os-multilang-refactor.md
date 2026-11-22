@@ -85,7 +85,7 @@ lib/
   - `pub struct InvokeParams` (agrupa `operation`, `window_id`, `capture_id`, `window: WindowQuery`, `text`, `control: ControlQuery`)
   - Mensajes de error agnósticos al lenguaje anfitrión (`"Restart the host process."` en lugar de `"Restart Python."`).
 
-- [ ] **Step 1: Escribir tests unitarios puros para `CoreEngine`, `InvokeParams` y mensajes agnósticos al lenguaje**
+- [x] **Step 1: Escribir tests unitarios puros para `CoreEngine`, `InvokeParams` y mensajes agnósticos al lenguaje**
 
 Agregar en `lib/rust/src/engine/tests.rs`:
 ```rust
@@ -103,7 +103,7 @@ fn invoke_params_rejects_unknown_operation_without_python_context() {
 }
 ```
 
-- [ ] **Step 2: Ejecutar `cargo test` para verificar el fallo inicial (TDD)**
+- [x] **Step 2: Ejecutar `cargo test` para verificar el fallo inicial (TDD)**
 
 Run:
 ```powershell
@@ -113,7 +113,7 @@ $env:RUSTUP_HOME = (Resolve-Path 'lib/.tools/rustup').Path
 ```
 Expected: FAIL porque aún no existen `worker_stopped_failure()` ni las estructuras desacopladas de PyO3.
 
-- [ ] **Step 3: Extraer `Worker` a `engine/coordinator.rs`, limpiar `engine.rs` de `pyo3` y mover wrappers PyO3 a `bindings_py.rs`**
+- [x] **Step 3: Extraer `Worker` a `engine/coordinator.rs`, limpiar `engine.rs` de `pyo3` y mover wrappers PyO3 a `bindings_py.rs`**
 
 1. Mover `Worker`, `ActiveWindow`, `Closed` / manejo de `handles`, `baselines`, `pending`, `ensure_baseline`, `prepare_capture`, `complete_capture`, `act_on_window`, `begin_close` y `poll_closing` desde `lib/rust/src/engine.rs` hacia `lib/rust/src/engine/coordinator.rs` (~350 líneas enfocadas en coordinación).
 2. Dejar `lib/rust/src/engine.rs` 100% libre de `use pyo3::...`:
@@ -122,7 +122,7 @@ Expected: FAIL porque aún no existen `worker_stopped_failure()` ni las estructu
 3. Crear `lib/rust/src/bindings_py.rs` con `#[pyclass] struct Engine(CoreEngine)`, `#[pyclass] struct Request(CoreRequest)`, `#[pyclass] struct Reply`, manteniendo las firmas exactas que espera Python (`open_session`, `open_auto_session`, `new_request`, `invoke` liberando el GIL con `py.detach`, `close_session`, `cancel_capture`, getters de `Reply`).
 4. Actualizar `lib/rust/src/lib.rs` para declarar `mod bindings_py;` (manteniendo `#[pymodule] fn _native`).
 
-- [ ] **Step 4: Verificar compilación Rust + pruebas unitarias Rust y `test_native.py`**
+- [x] **Step 4: Verificar compilación Rust + pruebas unitarias Rust y `test_native.py`**
 
 Run:
 ```powershell
@@ -130,7 +130,7 @@ Run:
 ```
 Expected: PASS (todos los tests de Rust existentes + los nuevos).
 
-- [ ] **Step 5: Commit de separación dominio/FFI**
+- [x] **Step 5: Commit de separación dominio/FFI**
 
 ```bash
 git add lib/rust/src/

@@ -99,7 +99,7 @@ impl<State: 'static> Lane<State> {
 }
 
 fn unavailable() -> Failure {
-    Failure::new("BRIDGE", "The desktop accessibility provider is unavailable. Restart Python to recover it.")
+    Failure::new("BRIDGE", "The desktop accessibility provider is unavailable. Restart the host process to recover it.")
 }
 
 #[derive(Default)]

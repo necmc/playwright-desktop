@@ -1,4 +1,4 @@
-use super::{QueuedCommand, RequestState, Shared, Worker};
+use super::{QueuedCommand, RequestState, Shared, coordinator::Worker};
 use crate::error::{Failure, Result};
 use std::{
     collections::HashSet,
@@ -15,11 +15,11 @@ pub(crate) enum ControlAction {
 }
 
 #[derive(Clone, Default)]
-pub(super) struct ControlQuery {
-    pub(super) role: String,
-    pub(super) name: String,
-    pub(super) scope_role: String,
-    pub(super) scope_name: String,
+pub struct ControlQuery {
+    pub role: String,
+    pub name: String,
+    pub scope_role: String,
+    pub scope_name: String,
 }
 
 pub(crate) struct ControlResult {
@@ -27,12 +27,12 @@ pub(crate) struct ControlResult {
 }
 
 #[derive(Clone, Default)]
-pub(super) struct WindowQuery {
-    pub(super) title: String,
-    pub(super) pid: Option<u32>,
-    pub(super) title_prefix: String,
-    pub(super) has_text: String,
-    pub(super) only_new: bool,
+pub struct WindowQuery {
+    pub title: String,
+    pub pid: Option<u32>,
+    pub title_prefix: String,
+    pub has_text: String,
+    pub only_new: bool,
 }
 
 impl WindowQuery {
