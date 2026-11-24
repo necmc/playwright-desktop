@@ -3,6 +3,7 @@ name = "playwright-desktop-py"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+description = "PyO3 native binding for Playwright Desktop"
 publish = false
 
 [lib]
@@ -11,4 +12,4 @@ crate-type = ["cdylib"]
 
 [dependencies]
 playwright-desktop-core = { path = "../../core" }
-pyo3 = { version = "=0.30.1", features = ["abi3-py310"] }
+pyo3 = { version = "0.30.1", features = ["abi3-py310"] }

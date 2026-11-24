@@ -57,7 +57,7 @@ jobs:
       - name: Instalar dependencias de compilación y publicación
         run: |
           python -m pip install --upgrade pip
-          python -m pip install "maturin>=1.16,<2" twine "playwright>=1.63,<1.66"
+          python -m pip install "maturin>=1.16,<2" twine "playwright>=1.63,<2"
 
       - name: Ejecutar pruebas de Rust
         run: cargo test --manifest-path lib/Cargo.toml --workspace --locked

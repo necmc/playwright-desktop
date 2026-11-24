@@ -12,7 +12,7 @@ from playwright.async_api import Page as AsyncPage
 
 import playwright_desktop as desktop
 from playwright_desktop import _patch
-from playwright_desktop._errors import PatchConflictError
+from playwright_desktop._errors import DesktopConfigurationError, PatchConflictError
 
 
 class FakeContext:
@@ -176,6 +176,20 @@ class PatchTests(unittest.TestCase):
         self.assertTrue(open_capture.allow_empty)
         with self.assertRaises(ValueError):
             WindowQuery()
+
+    def test_install_validates_supported_playwright_version_range(self):
+        for supported in ("1.63.0", "1.66.0", "1.66.0.post1", "1.99.1"):
+            with self.subTest(supported=supported):
+                desktop.uninstall()
+                with patch.object(_patch, "version", return_value=supported):
+                    desktop.install()
+
+        for unsupported in ("1.62.9", "2.0.0", "invalid"):
+            with self.subTest(unsupported=unsupported):
+                desktop.uninstall()
+                with patch.object(_patch, "version", return_value=unsupported):
+                    with self.assertRaises(DesktopConfigurationError):
+                        desktop.install()
 
 
 if __name__ == "__main__":

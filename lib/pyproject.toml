@@ -8,12 +8,19 @@ dynamic = ["version"]
 description = "Desktop interactions for Playwright Python"
 readme = "python/README.md"
 requires-python = ">=3.10"
-dependencies = ["playwright>=1.63,<1.66"]
+dependencies = ["playwright>=1.63,<2"]
+keywords = ["playwright", "desktop", "automation", "windows", "uia", "swing"]
 classifiers = [
     "Operating System :: Microsoft :: Windows",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: Implementation :: CPython",
     "Programming Language :: Rust",
 ]
+
+[project.urls]
+Homepage = "https://github.com/necmc/playwright-desktop"
+Repository = "https://github.com/necmc/playwright-desktop"
+Issues = "https://github.com/necmc/playwright-desktop/issues"
 
 [tool.maturin]
 manifest-path = "bindings/python/Cargo.toml"

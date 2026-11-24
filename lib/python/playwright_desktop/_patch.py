@@ -13,10 +13,10 @@ PATCH_CONTRACT = 1
 PATCHED_ATTRIBUTE = "expect_app"
 PLAYWRIGHT_PACKAGE_NAME = "playwright"
 MIN_PLAYWRIGHT_VERSION = (1, 63)
-MAX_PLAYWRIGHT_VERSION_EXCLUSIVE = (1, 66)
+MAX_PLAYWRIGHT_VERSION_EXCLUSIVE = (2, 0)
 MODE_SYNC = "sync"
 MODE_ASYNC = "async"
-VERSION_PATTERN = r"(\d+)\.(\d+)\.(\d+)"
+VERSION_PATTERN = r"(\d+)\.(\d+)(?:\.\d+)?(?:[.\-+a-zA-Z0-9]*)?"
 
 _lock = RLock()
 _absent = object()
