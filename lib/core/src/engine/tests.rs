@@ -7,8 +7,13 @@ struct FakePlatform {
     windows: Vec<(u32, &'static str)>,
     pending_windows: Option<Vec<(u32, &'static str)>>,
     probe_sequence: Option<Vec<(&'static str, bool)>>,
+    pending_probe_expires: bool,
+    held_probe_senders: RefCell<Vec<mpsc::Sender<Result<bool>>>>,
     expected_provider: Option<&'static str>,
     actions: usize,
+    act_results: RefCell<VecDeque<Option<ControlResult>>>,
+    hold_act_senders: bool,
+    held_act_senders: RefCell<Vec<mpsc::Sender<Result<Option<ControlResult>>>>>,
     released: Cell<Option<u64>>,
     brought_to_front: RefCell<Vec<u32>>,
     close_requests: RefCell<Vec<u32>>,
@@ -84,6 +89,13 @@ impl Platform for FakePlatform {
     }
 
     fn resolve_provider(&mut self, request: Arc<RequestState>, _: Self::Window) -> ProviderSelection<Self::Provider> {
+        if self.pending_probe_expires {
+            let (sender, receiver) = mpsc::channel();
+            self.held_probe_senders.borrow_mut().push(sender);
+            let mut probes = VecDeque::new();
+            probes.push_back(("jab", receiver));
+            return ProviderSelection::Pending { probes, until: Instant::now(), fallback: "fallback" };
+        }
         let sequences = self.probe_sequence.clone().unwrap_or_else(|| vec![("fake", true)]);
         let mut probes = VecDeque::new();
         for (id, matched) in sequences {
@@ -105,7 +117,12 @@ impl Platform for FakePlatform {
         assert!(matches!(action, ControlAction::Click));
         self.actions += 1;
         let (sender, result) = mpsc::channel();
-        sender.send(Ok(Some(ControlResult { text: None }))).unwrap();
+        if self.hold_act_senders {
+            self.held_act_senders.borrow_mut().push(sender);
+        } else {
+            let outcome = self.act_results.borrow_mut().pop_front().unwrap_or(Some(ControlResult { text: None }));
+            sender.send(Ok(outcome)).unwrap();
+        }
         Ok(result)
     }
 
@@ -187,6 +204,9 @@ fn title_prefix_respects_pid_and_rejects_ambiguous_matches() {
 
     let ambiguous = worker.select_candidate(&state, &query, worker.platform.candidates(&query).unwrap(), None).unwrap_err();
     assert_eq!(ambiguous.code, "AMBIGUOUS");
+    assert!(ambiguous.message.contains("pid=1 title=\"Informe - Perfil A\""));
+    assert!(ambiguous.message.contains("pid=2 title=\"Informe - Perfil B\""));
+    assert!(ambiguous.message.contains("Add an exact title"));
     query.pid = Some(2);
     let id = worker.select_candidate(&state, &query, worker.platform.candidates(&query).unwrap(), None).unwrap().unwrap();
     assert_eq!(worker.windows[&id].window, (2, "Informe - Perfil B"));
@@ -227,7 +247,10 @@ fn pending_has_text_discovery_handles_untitled_windows_and_ambiguity() {
         ..Arguments::default()
     });
     assert!(worker.step(&mut ambiguous).unwrap().is_none());
-    assert_eq!(worker.step(&mut ambiguous).err().unwrap().code, "AMBIGUOUS");
+    let error = worker.step(&mut ambiguous).err().unwrap();
+    assert_eq!(error.code, "AMBIGUOUS");
+    assert!(error.message.contains("pid=2 title=<untitled>"));
+    assert!(error.message.contains("pid=3 title=<untitled>"));
 }
 
 #[test]
@@ -667,4 +690,126 @@ fn host_os_language_returns_non_empty_bcp47_tag() {
     assert!(!direct.contains('_'));
     assert!(!direct.contains('\0'));
     assert_eq!(direct, via_engine);
+}
+
+#[test]
+fn ambiguous_match_message_lists_candidates_and_truncates_overflow() {
+    let mut worker = test_worker();
+    let state = request(session(1), Instant::now() + Duration::from_secs(1));
+
+    worker.platform.windows = vec![(101, "Duplicada"), (202, "Duplicada")];
+    let exact_query = WindowQuery { title: "Duplicada".into(), ..WindowQuery::default() };
+    let exact_error = worker
+        .select_candidate(&state, &exact_query, worker.platform.candidates(&exact_query).unwrap(), None)
+        .unwrap_err();
+    assert_eq!(exact_error.code, "AMBIGUOUS");
+    assert!(exact_error.message.contains("pid=101 title=\"Duplicada\""));
+    assert!(exact_error.message.contains("pid=202 title=\"Duplicada\""));
+    assert!(exact_error.message.contains("Add a PID"));
+
+    worker.platform.windows = vec![
+        (1, "Ventana 1"),
+        (2, "Ventana 2"),
+        (3, "Ventana 3"),
+        (4, "Ventana 4"),
+        (5, "Ventana 5"),
+        (6, "Ventana 6"),
+        (7, "Ventana 7"),
+    ];
+    let prefix_query = WindowQuery { title_prefix: "Ventana".into(), ..WindowQuery::default() };
+    let overflow_error = worker
+        .select_candidate(&state, &prefix_query, worker.platform.candidates(&prefix_query).unwrap(), None)
+        .unwrap_err();
+    assert_eq!(overflow_error.code, "AMBIGUOUS");
+    for pid in 1..=5 {
+        assert!(overflow_error.message.contains(&format!("pid={pid} title=\"Ventana {pid}\"")));
+    }
+    assert!(!overflow_error.message.contains("pid=6"));
+    assert!(overflow_error.message.contains("... (+2 more)"));
+}
+
+#[test]
+fn tentative_fallback_is_not_pinned_when_action_returns_none_and_allows_primary_provider_recovery() {
+    let mut worker = test_worker();
+    let owner = session(1);
+    worker.shared.sessions.lock().unwrap().insert(owner.id, owner.clone());
+    let deadline = Instant::now() + Duration::from_secs(10);
+
+    worker.platform.windows.push((2, "Formulario"));
+    worker.platform.pending_probe_expires = true;
+    worker.platform.expected_provider = Some("fallback");
+    worker.platform.act_results.borrow_mut().push_back(None);
+
+    let (mut cmd, _) = command(request(owner, deadline), Operation::Window(WindowOperation::Click), Arguments {
+        window: WindowQuery { title: "Formulario".into(), ..WindowQuery::default() },
+        control: ControlQuery { name: "Aceptar".into(), ..ControlQuery::default() },
+        ..Arguments::default()
+    });
+    assert!(worker.step(&mut cmd).unwrap().is_none());
+    assert!(worker.step(&mut cmd).unwrap().is_none());
+    assert!(worker.step(&mut cmd).unwrap().is_none());
+
+    let id = worker.windows.keys().copied().next().unwrap();
+    assert!(worker.windows[&id].provider.is_none());
+    assert_eq!(worker.platform.released.get(), Some(id));
+
+    worker.platform.released.set(None);
+    worker.platform.pending_probe_expires = false;
+    worker.platform.probe_sequence = Some(vec![("jab", true)]);
+    worker.platform.expected_provider = Some("jab");
+
+    assert!(worker.step(&mut cmd).unwrap().is_none());
+    assert!(worker.step(&mut cmd).unwrap().is_none());
+    assert_eq!(worker.step(&mut cmd).unwrap().unwrap().handle, id);
+    assert_eq!(worker.windows[&id].provider, Some("jab"));
+}
+
+#[test]
+fn tentative_fallback_pins_on_success_and_releases_on_in_flight_timeout() {
+    let mut worker = test_worker();
+    let owner = session(1);
+    worker.shared.sessions.lock().unwrap().insert(owner.id, owner.clone());
+    let deadline = Instant::now() + Duration::from_secs(10);
+
+    worker.platform.windows.push((2, "Nativa"));
+    worker.platform.probe_sequence = Some(vec![("jab", false)]);
+    worker.platform.expected_provider = Some("fallback");
+
+    let (mut ok_cmd, _) = command(request(owner.clone(), deadline), Operation::Window(WindowOperation::Click), Arguments {
+        window: WindowQuery { title: "Nativa".into(), ..WindowQuery::default() },
+        control: ControlQuery { name: "Aceptar".into(), ..ControlQuery::default() },
+        ..Arguments::default()
+    });
+    assert!(worker.step(&mut ok_cmd).unwrap().is_none());
+    assert!(worker.step(&mut ok_cmd).unwrap().is_none());
+    assert!(worker.windows.values().next().unwrap().provider.is_none());
+    let reply = worker.step(&mut ok_cmd).unwrap().unwrap();
+    assert_eq!(worker.windows[&reply.handle].provider, Some("fallback"));
+
+    let mut worker = test_worker();
+    worker.shared.sessions.lock().unwrap().insert(owner.id, owner.clone());
+    worker.platform.windows.push((2, "Colgada"));
+    worker.platform.probe_sequence = Some(vec![("jab", false)]);
+    worker.platform.expected_provider = Some("fallback");
+    worker.platform.hold_act_senders = true;
+
+    let short_deadline = Instant::now() + Duration::from_millis(200);
+    let (timeout_cmd, timeout_reply) = command(request(owner, short_deadline), Operation::Window(WindowOperation::Click), Arguments {
+        window: WindowQuery { title: "Colgada".into(), ..WindowQuery::default() },
+        control: ControlQuery { name: "Aceptar".into(), ..ControlQuery::default() },
+        ..Arguments::default()
+    });
+    let mut pending = VecDeque::from([timeout_cmd]);
+    worker.shared.queued.store(1, Ordering::Release);
+    worker.process_pending(&mut pending);
+    worker.process_pending(&mut pending);
+    std::thread::sleep(Duration::from_millis(220));
+    worker.process_pending(&mut pending);
+
+    assert!(pending.is_empty());
+    assert_eq!(worker.shared.queued.load(Ordering::Acquire), 0);
+    assert_eq!(timeout_reply.try_recv().unwrap().err().unwrap().code, "TIMEOUT");
+    let id = worker.windows.keys().copied().next().unwrap();
+    assert!(worker.windows[&id].provider.is_none());
+    assert_eq!(worker.platform.released.get(), Some(id));
 }

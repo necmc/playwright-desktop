@@ -91,8 +91,12 @@ class WindowSelectionTests(unittest.TestCase):
                 dcontext.app(title=title.upper()).get_by_role("textbox", name="Alias").input_value(timeout=0)
             with self.assertRaises(DesktopTimeoutError):
                 dcontext.app(title=title, pid=os.getpid()).get_by_role("textbox", name="Alias").input_value(timeout=0)
-            with self.assertRaises(AmbiguousMatchError):
+            with self.assertRaises(AmbiguousMatchError) as error:
                 dcontext.app(title=title).get_by_role("textbox", name="Alias").input_value()
+            message = str(error.exception)
+            self.assertIn(f"pid={first.pid}", message)
+            self.assertIn(f"pid={second.pid}", message)
+            self.assertIn(title, message)
 
     def test_duplicate_controls_are_rejected(self):
         title = self._title()

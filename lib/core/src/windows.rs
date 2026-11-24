@@ -1,6 +1,7 @@
 use crate::error::{Failure, Result, codes};
 use ::windows::Win32::Foundation::{CloseHandle, HWND, LPARAM, NO_ERROR, SetLastError, WPARAM};
 use ::windows::Win32::Globalization::{GetUserDefaultUILanguage, LCIDToLocaleName};
+use ::windows::Win32::Graphics::Dwm::{DWMWA_CLOAKED, DwmGetWindowAttribute};
 use ::windows::Win32::System::Threading::{
     OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
 };
@@ -104,10 +105,24 @@ struct CollectState {
     include_untitled: bool,
 }
 
+fn is_cloaked(handle: HWND) -> bool {
+    let mut cloaked: u32 = 0;
+    // SAFETY: handle comes from EnumWindows; cloaked is a writable u32 out-parameter for DWMWA_CLOAKED.
+    let result = unsafe {
+        DwmGetWindowAttribute(
+            handle,
+            DWMWA_CLOAKED,
+            std::ptr::from_mut(&mut cloaked).cast(),
+            std::mem::size_of::<u32>() as u32,
+        )
+    };
+    result.is_ok() && cloaked != 0
+}
+
 unsafe extern "system" fn collect(handle: HWND, parameter: LPARAM) -> BOOL {
     // SAFETY: EnumWindows invokes synchronously; parameter points to our live CollectState.
     unsafe {
-        if IsWindowVisible(handle).as_bool() {
+        if IsWindowVisible(handle).as_bool() && !is_cloaked(handle) {
             let state = &mut *(parameter.0 as *mut CollectState);
             let length = GetWindowTextLengthW(handle);
             let mut pid = 0;
@@ -172,4 +187,19 @@ pub fn host_os_language() -> String {
         }
     }
     DEFAULT_OS_LANGUAGE.into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cloaked_check_handles_invalid_handle_without_panicking() {
+        assert!(!is_cloaked(HWND(std::ptr::null_mut())));
+    }
+
+    #[test]
+    fn list_for_query_succeeds_with_cloaked_filter() {
+        assert!(list_for_query(true).is_ok());
+    }
 }

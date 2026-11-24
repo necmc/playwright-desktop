@@ -18,6 +18,7 @@ use std::{
 
 const JAB_LANE_NAME: &str = "playwright-desktop-jab";
 const JAB_RETRY_POLL: Duration = Duration::from_millis(10);
+const JAB_COLD_INIT_STALL_FLOOR: Duration = Duration::from_secs(3);
 
 #[derive(Default)]
 struct Java {
@@ -69,7 +70,8 @@ impl WindowsAccessibilityProvider for JavaProviderAdapter {
         deadline: Instant,
     ) -> Result<Option<Receiver<Result<bool>>>> {
         let retry_until = (!request.immediate && windows::has_java_launcher_name(&window)).then_some(deadline);
-        let receiver = self.lane()?.submit(request, move |state, request| {
+        let stall_deadline = request.deadline.max(Instant::now() + JAB_COLD_INIT_STALL_FLOOR);
+        let receiver = self.lane()?.submit_with_stall_deadline(request, stall_deadline, move |state, request| {
             let prepared = state
                 .backend
                 .prepare_session(request.session.id, &request.session.config, &|| request.check());

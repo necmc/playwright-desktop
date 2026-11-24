@@ -16,6 +16,7 @@ use std::{
 const IDLE_POLL_INTERVAL: Duration = Duration::from_millis(15);
 const BUSY_POLL_INTERVAL: Duration = Duration::from_millis(5);
 const MAX_BATCH_DRAIN: usize = 64;
+const MAX_AMBIGUOUS_CANDIDATES_IN_ERROR: usize = 5;
 const CLEANUP_TIMEOUT: Duration = Duration::from_secs(10);
 
 const TIMEOUT_MESSAGE: &str =
@@ -34,7 +35,7 @@ pub(super) struct BoundWindow<W, P> {
     session: u64,
     pub(super) window: W,
     capture: Option<u64>,
-    provider: Option<P>,
+    pub(super) provider: Option<P>,
 }
 
 pub(super) struct Worker<P: Platform> {
@@ -100,8 +101,15 @@ impl<P: Platform> Worker<P> {
     }
 
     fn complete(&mut self, command: ActiveCommand<P>, result: Result<CoreReply>) {
-        if result.is_err() && matches!(command.operation, Operation::CompleteCapture) {
-            self.cancel(command.request.session.id, command.arguments.capture_id);
+        if result.is_err() {
+            if matches!(command.operation, Operation::CompleteCapture) {
+                self.cancel(command.request.session.id, command.arguments.capture_id);
+            }
+            if let Some(PendingCall::Action { id, provider, confirmed: false, .. }) = command.pending {
+                if self.windows.get(&id).is_none_or(|item| item.provider.is_none()) {
+                    self.platform.release(id, provider);
+                }
+            }
         }
         self.shared.queued.fetch_sub(1, Ordering::AcqRel);
         let _ = command.reply.send(result);
@@ -182,16 +190,18 @@ impl<P: Platform> Worker<P> {
         let mut candidates = candidates
             .into_iter()
             .filter(|window| !capture.is_some_and(|(_, before)| before.contains(&self.platform.window_key(window))));
-        let Some(candidate) = candidates.next() else {
+        let Some(first) = candidates.next() else {
             return Ok(None);
         };
-        if candidates.next().is_some() {
+        if let Some(second) = candidates.next() {
+            let summary = format_ambiguous_candidates(&self.platform, first, second, candidates);
             let filter = if query.title.is_empty() { "an exact title" } else { "a PID" };
             return Err(Failure::new(
                 codes::AMBIGUOUS,
-                format!("More than one window matches. Add {filter} to narrow the search."),
+                format!("More than one window matches ({summary}). Add {filter} to narrow the search."),
             ));
         }
+        let candidate = first;
         request.check()?;
         let key = self.platform.window_key(&candidate);
         if let Some((&id, _)) = self.windows.iter().find(|(_, item)| self.platform.window_key(&item.window) == key) {
@@ -267,7 +277,7 @@ impl<P: Platform> Worker<P> {
                     match receive(receiver) {
                         Ok(Some(Ok(true))) => {
                             let (selected, _) = probes.pop_front().unwrap();
-                            return self.dispatch(command, id, selected);
+                            return self.dispatch(command, id, selected, true);
                         }
                         Ok(Some(Ok(false))) | Err(_) => {
                             probes.pop_front();
@@ -282,19 +292,34 @@ impl<P: Platform> Worker<P> {
                         }
                     }
                 }
-                self.dispatch(command, id, fallback)
+                self.dispatch(command, id, fallback, false)
             }
-            PendingCall::Action { id, result } => {
+            PendingCall::Action { id, provider, confirmed, result } => {
                 let Some(response) = receive(&result)? else {
-                    command.pending = Some(PendingCall::Action { id, result });
+                    command.pending = Some(PendingCall::Action { id, provider, confirmed, result });
                     return Ok(None);
                 };
                 match response {
-                    Ok(Some(result)) => Ok(Some(self.reply_for_window(id, result.text))),
-                    Ok(None) => Ok(None),
+                    Ok(Some(result)) => {
+                        if !confirmed {
+                            if let Some(item) = self.windows.get_mut(&id) {
+                                item.provider.get_or_insert(provider);
+                            }
+                        }
+                        Ok(Some(self.reply_for_window(id, result.text)))
+                    }
+                    Ok(None) => {
+                        if !confirmed && self.windows.get(&id).is_none_or(|item| item.provider.is_none()) {
+                            self.platform.release(id, provider);
+                        }
+                        Ok(None)
+                    }
                     Err(error) => {
                         if error.code == codes::STALE {
                             self.remove_window(id, true);
+                        }
+                        if !confirmed && self.windows.get(&id).is_none_or(|item| item.provider.is_none()) {
+                            self.platform.release(id, provider);
                         }
                         Err(error)
                     }
@@ -441,11 +466,11 @@ impl<P: Platform> Worker<P> {
             _ => {}
         }
         if let Some(provider) = item.provider {
-            return self.dispatch(command, id, provider);
+            return self.dispatch(command, id, provider, true);
         }
         let window = item.window.clone();
         match self.platform.resolve_provider(request.clone(), window) {
-            ProviderSelection::Ready(provider) => self.dispatch(command, id, provider),
+            ProviderSelection::Ready(provider) => self.dispatch(command, id, provider, true),
             ProviderSelection::Pending { probes, until, fallback } => {
                 command.pending = Some(PendingCall::ResolveProvider { id, probes, until, fallback });
                 Ok(None)
@@ -479,12 +504,16 @@ impl<P: Platform> Worker<P> {
         Ok(None)
     }
 
-    fn dispatch(&mut self, command: &mut ActiveCommand<P>, id: u64, provider: P::Provider) -> Result<Option<CoreReply>> {
+    fn dispatch(&mut self, command: &mut ActiveCommand<P>, id: u64, provider: P::Provider, confirmed: bool) -> Result<Option<CoreReply>> {
         let request = &command.request;
         request.check()?;
         self.window(id, request.session.id)?;
         let item = self.windows.get_mut(&id).unwrap();
-        let provider = *item.provider.get_or_insert(provider);
+        let provider = if confirmed {
+            *item.provider.get_or_insert(provider)
+        } else {
+            item.provider.unwrap_or(provider)
+        };
         let action = match command.operation {
             Operation::Window(WindowOperation::WaitVisible) => ControlAction::WaitVisible,
             Operation::Window(WindowOperation::ReadText) => ControlAction::ReadText,
@@ -500,7 +529,7 @@ impl<P: Platform> Worker<P> {
             action,
             command.arguments.control.clone(),
         )?;
-        command.pending = Some(PendingCall::Action { id, result });
+        command.pending = Some(PendingCall::Action { id, provider, confirmed, result });
         Ok(None)
     }
 
@@ -532,4 +561,31 @@ fn receive<T>(reply: &Receiver<T>) -> Result<Option<T>> {
         Err(mpsc::TryRecvError::Empty) => Ok(None),
         Err(mpsc::TryRecvError::Disconnected) => Err(Failure::new(codes::BRIDGE, "The desktop accessibility provider stopped.")),
     }
+}
+
+fn format_ambiguous_candidates<P: Platform>(
+    platform: &P,
+    first: P::Window,
+    second: P::Window,
+    rest: impl Iterator<Item = P::Window>,
+) -> String {
+    let mut shown = Vec::with_capacity(MAX_AMBIGUOUS_CANDIDATES_IN_ERROR);
+    let mut overflow = 0usize;
+    for window in [first, second].into_iter().chain(rest) {
+        if shown.len() < MAX_AMBIGUOUS_CANDIDATES_IN_ERROR {
+            let (pid, title) = platform.window_metadata(&window);
+            let title_label = if title.is_empty() {
+                "<untitled>".to_string()
+            } else {
+                format!("{title:?}")
+            };
+            shown.push(format!("pid={pid} title={title_label}"));
+        } else {
+            overflow += 1;
+        }
+    }
+    if overflow > 0 {
+        shown.push(format!("... (+{overflow} more)"));
+    }
+    shown.join("; ")
 }

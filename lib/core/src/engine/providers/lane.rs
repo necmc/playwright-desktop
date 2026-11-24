@@ -55,6 +55,16 @@ impl<State: 'static> Lane<State> {
         request: Arc<RequestState>,
         operation: impl FnOnce(&mut State, &RequestState) -> Result<Output> + Send + 'static,
     ) -> Result<Receiver<Result<Output>>> {
+        let stall_deadline = request.deadline;
+        self.submit_with_stall_deadline(request, stall_deadline, operation)
+    }
+
+    pub(super) fn submit_with_stall_deadline<Output: Send + 'static>(
+        &self,
+        request: Arc<RequestState>,
+        stall_deadline: Instant,
+        operation: impl FnOnce(&mut State, &RequestState) -> Result<Output> + Send + 'static,
+    ) -> Result<Receiver<Result<Output>>> {
         self.check_health()?;
         let (reply, receiver) = mpsc::channel();
         let status = self.status.clone();
@@ -67,7 +77,7 @@ impl<State: 'static> Lane<State> {
                         if status.stopped {
                             return Err(unavailable());
                         }
-                        status.active_deadline = Some(request.deadline);
+                        status.active_deadline = Some(stall_deadline);
                     }
                     let result = operation(state, &request);
                     status.lock().unwrap().active_deadline = None;

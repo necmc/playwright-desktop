@@ -260,6 +260,8 @@ enum PendingCall<P: Platform> {
     },
     Action {
         id: u64,
+        provider: P::Provider,
+        confirmed: bool,
         result: Receiver<Result<Option<ControlResult>>>,
     },
     Closing {

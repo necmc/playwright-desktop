@@ -318,6 +318,29 @@ mod tests {
     }
 
     #[test]
+    fn submit_with_stall_deadline_preserves_lane_health_during_slow_cold_init() {
+        let lane = Lane::start("cold-init-stall-floor", || (), |_| {}).unwrap();
+        let (entered, started) = mpsc::channel();
+        let (release, finish) = mpsc::channel();
+        let short_request = request(Duration::from_millis(60));
+        let stall_deadline = Instant::now() + Duration::from_secs(2);
+        let reply = lane
+            .submit_with_stall_deadline(short_request, stall_deadline, move |_, _| {
+                entered.send(()).unwrap();
+                finish.recv_timeout(Duration::from_secs(5)).unwrap();
+                Ok(())
+            })
+            .unwrap();
+        started.recv_timeout(Duration::from_secs(2)).unwrap();
+        std::thread::sleep(Duration::from_millis(180));
+        assert!(lane.check_health().is_ok());
+        release.send(()).unwrap();
+        reply.recv_timeout(Duration::from_secs(2)).unwrap().unwrap();
+        let next = lane.submit(request(Duration::from_secs(1)), |_, _| Ok(42)).unwrap();
+        assert_eq!(next.recv_timeout(Duration::from_secs(1)).unwrap().unwrap(), 42);
+    }
+
+    #[test]
     fn provider_registry_selects_first_matching_provider_and_falls_back_on_error() {
         let mut failing_primary = FakeWindowProvider::new("custom");
         failing_primary.fail_probe = true;
