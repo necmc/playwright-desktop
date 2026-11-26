@@ -1,8 +1,9 @@
-from urllib.parse import urljoin
+"""Page Object del formulario web principal."""
 
 from playwright.sync_api import Page
 
 from models.equipment_information import EquipmentInformation
+from pages.web.pdf_preview_page import PdfPreviewPage
 
 
 class InformationPage:
@@ -13,33 +14,30 @@ class InformationPage:
         self.computer_name = page.get_by_role("textbox", name="Nombre del equipo", exact=True)
         self.alias = page.get_by_role("textbox", name="Alias", exact=True)
         self.obtain_button = page.get_by_role("button", name="Obtener información", exact=True)
+        self.continue_button = page.get_by_role("button", name="Continuar", exact=True)
         self.status = page.get_by_role("status")
-        self.pdf_viewer = page.get_by_title("Vista previa de la información confirmada", exact=True)
 
     def open(self) -> None:
         self.page.goto(self.base_url)
 
-    def request_information(self) -> None:
+    def click_obtain(self) -> None:
         self.obtain_button.click()
 
-    def wait_for_result(self) -> None:
-        self.pdf_viewer.wait_for(state="visible")
+    def wait_for_data(self) -> None:
+        self.continue_button.wait_for(state="visible")
 
-    def result_message(self) -> str:
+    def read_status(self) -> str:
         return self.status.inner_text()
 
-    def read_information(self) -> EquipmentInformation:
+    def read_data(self) -> EquipmentInformation:
         return EquipmentInformation(
             date=self.date.input_value(),
             computer_name=self.computer_name.input_value(),
             alias=self.alias.input_value(),
         )
 
-    def download_pdf(self) -> bytes:
-        address = self.pdf_viewer.get_attribute("src")
-        if not address:
-            raise RuntimeError("El visor no tiene una URL de PDF.")
-        response = self.page.request.get(urljoin(self.base_url, address))
-        if not response.ok:
-            raise RuntimeError(f"No se pudo descargar el PDF: HTTP {response.status}.")
-        return response.body()
+    def continue_to_pdf(self) -> PdfPreviewPage:
+        self.continue_button.click()
+        pdf_page = PdfPreviewPage(self.page, self.base_url)
+        pdf_page.wait_until_visible()
+        return pdf_page

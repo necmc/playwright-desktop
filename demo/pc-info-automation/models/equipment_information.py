@@ -13,7 +13,7 @@ class EquipmentInformation:
     computer_name: str
     alias: str
 
-    def as_payload(self) -> dict[str, str]:
+    def as_fields(self) -> dict[str, str]:
         return {
             FIELD_DATE: self.date,
             FIELD_COMPUTER_NAME: self.computer_name,

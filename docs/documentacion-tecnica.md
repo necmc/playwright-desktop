@@ -11,7 +11,7 @@ playwright-desktop integra Playwright Python con aplicaciones de escritorio invo
 | Componente | Responsabilidad |
 | --- | --- |
 | Web Python | Crear operaciones, validar resultados, generar PDF y servir la publicación ClickOnce. |
-| JavaScript | Solicitar la activación ClickOnce y consultar el resultado de la operación. |
+| JavaScript | Solicitar la activación ClickOnce, consultar el resultado y alternar entre el formulario y la vista dedicada del PDF. |
 | Lanzador C# | Leer los argumentos de activación y ejecutar el JAR con el runtime Java configurado. |
 | Formulario Java | Precargar los datos del equipo, permitir su edición y devolverlos a la web. |
 | Librería Python/Rust | Separar el núcleo multi-SO/multi-proveedor en `lib/core/` (aislamiento por sesión `only_new`, idioma del SO `os_language`, Java Access Bridge y UI Automation) del adaptador PyO3 (`lib/bindings/python/`) y el paquete Python (`lib/python/`) que extiende `Page` con `page.expect_app()` y `DesktopContext`. |
@@ -34,7 +34,8 @@ sequenceDiagram
     Server-->>Java: Confirmación de recepción
     Web->>Server: Consultar resultado
     Server-->>Web: Datos y dirección del PDF
-    Web->>Server: Mostrar PDF en el visor
+    Note over Web: Mostrar datos en el formulario y cambiar botón a Continuar
+    Web->>Server: Al pulsar Continuar, cargar PDF en la vista dedicada
 ```
 
 La publicación utiliza parámetros URL de ClickOnce. El lanzador .NET Framework lee `ApplicationDeployment.CurrentDeployment.ActivationUri` y transmite la referencia de operación a Java. El navegador y el controlador ClickOnce del sistema realizan la activación. [Documentación de Microsoft](https://learn.microsoft.com/en-us/visualstudio/deployment/how-to-retrieve-query-string-information-in-an-online-clickonce-application?view=visualstudio)
@@ -77,7 +78,7 @@ El lanzador obtiene la ruta de Java de su archivo de configuración. El formular
 
 ### Automatización de la demo
 
-La automatización usa el puerto predeterminado y configura `JAVA_HOME` con `playwright_desktop.configure(...)`. `run.py` comprueba que la demo responde y ejecuta CP-PI-01 dentro de `with page.expect_app(...) as opened:`, usando `opened.context` (`DesktopContext`) con `only_new=True` y `dcontext.os_language` para pulsar **Abrir** en Edge, confirmar el instalador ClickOnce o los avisos del sistema operativo antes de recibir la `App` del formulario Java y cerrar el flujo devolviendo el control al mismo `BrowserContext`.
+La automatización usa el puerto predeterminado, toma `JAVA_HOME` del entorno y organiza sus Page Objects en `pages/web/`, `pages/desktop/` y `pages/dialogs/`. `run.py` comprueba que la demo responde y ejecuta CP-PI-01 dentro de `with page.expect_app(...) as opened:`, fijando el timeout con `dcontext.set_default_timeout(...)` y usando `opened.context` (`DesktopContext`) con `only_new=True` y `dcontext.os_language` para pulsar **Abrir** en Edge y aceptar ClickOnce o SmartScreen antes de recibir la `App` del formulario Java; tras confirmar en escritorio, valida los datos devueltos en el formulario web y pulsa **Continuar** para comprobar la vista dedicada del PDF.
 
 CP-PI-02 comprueba el clic de apertura de forma independiente con el soporte nativo de Windows mediante `page.expect_app(...)`. Su Page Object localiza la ventana del navegador con `dcontext.app(pid=pid, title_prefix=...)` y cierra el diálogo capturado con `close()`.
 

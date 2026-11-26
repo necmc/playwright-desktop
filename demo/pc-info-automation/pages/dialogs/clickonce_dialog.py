@@ -1,4 +1,4 @@
-"""Confirmación opcional del instalador ClickOnce de pc-info."""
+"""Page Object de la advertencia de seguridad de ClickOnce."""
 
 from urllib.parse import urlsplit
 
@@ -10,7 +10,7 @@ LABEL_TIMEOUT_MS = 1000
 CLICK_TIMEOUT_MS = 3000
 
 
-class ClickOnceInstaller:
+class ClickOnceDialog:
     def __init__(self, dcontext: DesktopContext, *, application_name: str, base_url: str):
         self.application_name = application_name
         self.source = urlsplit(base_url).hostname
@@ -20,7 +20,7 @@ class ClickOnceInstaller:
             title, self._run_button = "Application Run - Security Warning", "Run"
         self._notice = dcontext.app(title=title, only_new=True)
 
-    def confirm_if_present(self) -> bool:
+    def accept_if_present(self) -> bool:
         try:
             self._notice.get_by_role("button", name=self._run_button).wait_for(timeout=DETECTION_TIMEOUT_MS)
         except DesktopTimeoutError:

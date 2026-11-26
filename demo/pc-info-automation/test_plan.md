@@ -2,7 +2,7 @@
 
 ## Objetivo y alcance
 
-Validar el recorrido de extremo a extremo desde el navegador hasta el formulario Java y de vuelta a la web. El resultado esperado es que la fecha, el nombre del equipo y el alias confirmados en el formulario coincidan con los que muestra la web y contiene el PDF.
+Validar el recorrido de extremo a extremo desde el navegador hasta el formulario Java, la revisión de datos en la web y la vista del PDF. El resultado esperado es que la vista PDF permanezca oculta al inicio y al regresar de Java, que el formulario web muestre la fecha, el nombre del equipo y el alias confirmados con el botón **Continuar**, y que al pulsarlo se pase a la vista del PDF cuyo texto contiene los tres valores.
 
 El recorrido CP-PI-01 es el mismo con el paquete de PyPI y con el wheel local. [Comandos de ejecución](../README.md#ejecutar-pc-info-automation).
 
@@ -23,10 +23,10 @@ Datos de prueba: fecha `2026-11-19`, equipo `EQUIPO-CLICKONCE` y alias `Integrac
 | La prueba pulsa **Obtener información** y **Abrir** en Edge. | ClickOnce inicia la activación de la aplicación. |
 | Si ClickOnce muestra la confirmación, la prueba valida el nombre de la demo y su origen y pulsa **Ejecutar**. | Se abre una nueva ventana **Información del equipo**. |
 | Edita los tres campos y pulsa **Confirmar**. | La ventana Java se cierra. |
-| Revisa el resultado en la web. | La página muestra los tres valores ingresados, el mensaje de confirmación y el visor PDF. |
+| Revisa el resultado en la web y pulsa **Continuar**. | Antes de pulsar **Continuar**, la página muestra los tres valores ingresados, el mensaje de confirmación y el botón **Continuar** sin mostrar el visor PDF. Al pulsar **Continuar**, pasa a la vista dedicada del visor PDF. |
 | Lee el PDF generado. | Su texto contiene los tres valores ingresados. |
 
-**Criterio de salida.** CP-PI-01 se aprueba cuando se cumplen todos los resultados esperados. En la revisión de la demo, abre también la vista previa y comprueba que los tres valores sean legibles.
+**Criterio de salida.** CP-PI-01 se aprueba cuando se cumplen todos los resultados esperados. En la revisión manual de la demo, verifica también que al pulsar **Continuar** el PDF sea legible en el visor y que **Volver** regrese al formulario limpio.
 
 **Evidencia.** Registra el resultado, el navegador y la versión y origen de la librería (PyPI o local). Si falla, anota el paso, el resultado esperado y el observado, y la salida de consola.
 
@@ -39,12 +39,17 @@ Verificación independiente que requiere una versión con soporte nativo de Wind
 | Ruta | Responsabilidad |
 | --- | --- |
 | `run.py` | Verifica la disponibilidad de la demo y ejecuta CP-PI-01. |
-| `tests/test_flow.py` | Define el recorrido y sus resultados esperados. Usa `page.expect_app()` pasando `opened.context` (`DesktopContext`) a los avisos intermedios y `opened.value` (`App`) al Page Object del formulario. |
-| `tests/test_clickonce.py` | Contiene la verificación independiente del clic de apertura en Edge. |
-| `pages/` | Contiene los objetos de la web, de los avisos de apertura y seguridad, y del formulario Java. |
-| `models/` | Contiene `EquipmentInformation`, el DTO con los tres datos que se comparan a lo largo del flujo. |
-| `fixtures/` | Abre Edge con un perfil temporal y libera los recursos de cada prueba. |
-| `utils/` | Extrae el texto del PDF para comprobar su contenido. |
-| `config.py` | Define la URL de la demo y el plazo de activación. |
+| `tests/test_flow.py` | Define el recorrido CP-PI-01 leyendo Page Objects en secuencia de negocio, manteniendo `page.expect_app()` visible para capturar la ventana Java. |
+| `tests/test_clickonce.py` | Contiene la verificación independiente CP-PI-02 del clic de apertura en Edge usando `InformationPage` y `BrowserOpenDialog`. |
+| `pages/web/information_page.py` | `InformationPage`: formulario web inicial (**Obtener información**, espera y lectura de datos recibidos, transición a `PdfPreviewPage` al pulsar **Continuar**). |
+| `pages/web/pdf_preview_page.py` | `PdfPreviewPage`: vista dedicada del visor PDF (visibilidad, descarga y lectura de texto, regreso con **Volver**). |
+| `pages/desktop/desktop_form_window.py` | `DesktopFormWindow`: ventana Java de escritorio (detección de disponibilidad, llenado de campos y confirmación). |
+| `pages/dialogs/browser_open_dialog.py` | `BrowserOpenDialog`: aviso nativo de apertura o enlace de descarga en Edge. |
+| `pages/dialogs/clickonce_dialog.py` | `ClickOnceDialog`: advertencia de seguridad de ClickOnce (validación de origen/nombre y botón **Ejecutar**). |
+| `pages/dialogs/sscreen_dialog.py` | `SScreenDialog`: advertencia de Microsoft Defender SmartScreen (**Más información** y **Ejecutar de todas formas**). |
+| `models/equipment_information.py` | `EquipmentInformation`: DTO con fecha, equipo y alias comparados entre desktop, web y PDF. |
+| `fixtures/` | Abre Edge con un perfil temporal, inicializa `info_page` y `pdf_page` y libera los recursos de cada prueba. |
+| `utils/pdf.py` | Extrae texto del PDF usado internamente por `PdfPreviewPage.read_text()`. |
+| `config.py` | Define la URL de la demo, los plazos de activación y las pausas configurables. |
 
-Los objetos encapsulan las interacciones con cada pantalla y esperan condiciones observables, como la visibilidad del PDF o el cierre del formulario. El caso expresa qué valores y mensajes deben verse. El servidor de la demo sigue activo al terminar la prueba.
+Los objetos encapsulan los locators y las esperas observables de cada pantalla o diálogo; las pruebas expresan únicamente los pasos funcionales y aserciones del caso. El servidor de la demo sigue activo al terminar la prueba.

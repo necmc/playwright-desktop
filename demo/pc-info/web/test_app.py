@@ -29,6 +29,17 @@ class OperationTests(unittest.TestCase):
         self.assertEqual(response.status_code, 201)
         return response.get_json()["operation_id"]
 
+    def test_initial_page_renders_only_form_and_hides_pdf_section(self):
+        response = self.client.get("/")
+        self.assertEqual(response.status_code, 200)
+        html = response.get_data(as_text=True)
+        self.assertIn('id="information-section"', html)
+        self.assertNotIn('id="information-section" class="information" hidden', html)
+        self.assertIn('id="preview-section"', html)
+        self.assertIn('aria-label="Vista previa del PDF" hidden', html)
+        self.assertIn("Obtener información", html)
+        self.assertNotIn("preview-placeholder", html)
+
     def test_launcher_reference_and_manifest_content_type(self):
         response = self.client.post("/api/operations")
         result = response.get_json()

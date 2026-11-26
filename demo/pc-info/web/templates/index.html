@@ -10,7 +10,7 @@
   <body>
     <header><strong>playwright-desktop</strong><span>Demo local</span></header>
     <main>
-      <section class="information" aria-labelledby="page-title">
+      <section id="information-section" class="information" aria-labelledby="page-title">
         <h1 id="page-title">Información del equipo</h1>
         <form id="information-form">
           <label for="date">Fecha</label>
@@ -24,10 +24,15 @@
         <p id="operation-status" role="status" aria-live="polite">Listo para obtener los datos desde la aplicación de escritorio.</p>
         <a id="launch-link" hidden>Abrir aplicación</a>
       </section>
-      <section class="preview" aria-label="Vista previa del PDF">
-        <div class="preview-heading"><h2>Documento PDF</h2><a id="pdf-link" target="_blank" rel="noopener" hidden>Abrir PDF</a></div>
-        <p id="preview-placeholder">El PDF aparecerá aquí cuando confirmes los datos en la aplicación.</p>
-        <iframe id="pdf-viewer" title="Vista previa de la información confirmada" hidden></iframe>
+      <section id="preview-section" class="preview" aria-label="Vista previa del PDF" hidden>
+        <div class="preview-heading">
+          <h2>Documento PDF</h2>
+          <div class="preview-actions">
+            <a id="pdf-link" target="_blank" rel="noopener">Abrir PDF</a>
+            <button id="back-button" type="button" class="secondary">Volver</button>
+          </div>
+        </div>
+        <iframe id="pdf-viewer" title="Vista previa de la información confirmada"></iframe>
       </section>
     </main>
   </body>

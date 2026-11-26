@@ -1,4 +1,4 @@
-"""Aviso de apertura y descargas de ClickOnce en la ventana del navegador."""
+"""Page Object del aviso de apertura y descargas en el navegador."""
 
 from playwright.sync_api import Page
 from playwright_desktop import DesktopContext, DesktopTimeoutError
@@ -11,13 +11,13 @@ OPEN_NOTICE_TIMEOUT_MS = 8000
 DOWNLOAD_LINK_TIMEOUT_MS = 1000
 
 
-class BrowserClickOnce:
+class BrowserOpenDialog:
     def __init__(self, dcontext: DesktopContext, page: Page):
         self.dcontext = dcontext
         self.page = page
 
     def click_open(self) -> None:
-        browser_app = self._app()
+        browser_window = self._browser_window()
         if self.page.evaluate(SPANISH_LANG_CHECK):
             confirmation_title, open_button = "¿Quieres abrir este archivo?", "Abrir"
             open_link = "Abrir archivo"
@@ -25,12 +25,12 @@ class BrowserClickOnce:
             confirmation_title, open_button = "Do you want to open this file?", "Open"
             open_link = "Open file"
 
-        notice = browser_app.get_by_role("pane", name=confirmation_title)
+        notice = browser_window.get_by_role("pane", name=confirmation_title)
         if self._click_if_visible(notice.get_by_role("button", name=open_button), timeout=OPEN_NOTICE_TIMEOUT_MS):
             print("ClickOnce: clic en Abrir del aviso del navegador.", flush=True)
             return
 
-        item = browser_app.get_by_role("listitem", name="InformationDemo.application")
+        item = browser_window.get_by_role("listitem", name="InformationDemo.application")
         link = item.get_by_role("link", name=open_link)
         if self._click_if_visible(link, timeout=DOWNLOAD_LINK_TIMEOUT_MS):
             print("ClickOnce: clic en Abrir archivo del aviso de descargas.", flush=True)
@@ -38,7 +38,7 @@ class BrowserClickOnce:
 
         raise AssertionError("El navegador no mostró un control de apertura para InformationDemo.application en el aviso.")
 
-    def _app(self):
+    def _browser_window(self):
         browser = self.page.context.browser
         protocol = browser.new_browser_cdp_session()
         try:

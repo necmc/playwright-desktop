@@ -1,4 +1,4 @@
-"""Aviso de MS SScreen."""
+"""Page Object de la advertencia de Microsoft Defender SmartScreen."""
 
 from playwright.sync_api import Page
 from playwright_desktop import DesktopContext, DesktopTimeoutError
@@ -9,7 +9,7 @@ ACTION_TIMEOUT_MS = 3000
 POST_REVEAL_DELAY_MS = 200
 
 
-class SScreenWarning:
+class SScreenDialog:
     def __init__(self, dcontext: DesktopContext, page: Page):
         self.page = page
         if dcontext.os_language.lower().startswith(SPANISH_LANG_PREFIX):
@@ -23,7 +23,7 @@ class SScreenWarning:
         self._app = dcontext.app(has_text=heading, only_new=True)
         self._details = self._app.get_by_role("link", name=self._details_name)
 
-    def confirm_if_present(self) -> bool:
+    def accept_if_present(self) -> bool:
         try:
             self._details.wait_for(timeout=DETECTION_TIMEOUT_MS)
         except DesktopTimeoutError:

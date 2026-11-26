@@ -4,13 +4,13 @@ Ejecuta los comandos en PowerShell desde la raíz del repositorio.
 
 ## Levantar pc-info
 
-Requiere Windows x64, Python 3.10–3.14, JDK 11+, .NET Framework 4.8, SDK de .NET 9+ y Edge u otro navegador compatible con ClickOnce.
+Requiere Windows x64, Python 3.10+, JDK 11+, .NET Framework 4.8, SDK de .NET 9+ y Edge u otro navegador compatible con ClickOnce.
 
 ```powershell
 .\demo\pc-info\start.ps1
 ```
 
-Abre la demo y pulsa **Obtener información**. Confirma el aviso del navegador o usa el enlace **Abrir aplicación** si el aviso no aparece. Confirma los datos en Java para ver el PDF. [Abrir pc-info](http://127.0.0.1:18765).
+Abre la demo y pulsa **Obtener información**. Confirma el aviso del navegador o usa el enlace **Abrir aplicación** si el aviso no aparece. Confirma los datos en Java, revísalos en el formulario web y pulsa **Continuar** para pasar a la vista del PDF. [Abrir pc-info](http://127.0.0.1:18765).
 
 ## Ejecutar pc-info-automation
 

@@ -1,1 +1,1 @@
-"""Page Objects de la demo web y del formulario Java."""
+"""Page Objects de la demo web, diálogos del sistema y formulario Java."""
